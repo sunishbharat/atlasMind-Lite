@@ -55,7 +55,7 @@ class JQL_Embeddings:
             raise FileNotFoundError(f"Annotation file not found: {path}")
 
         self.seed_sample_jql_embeddings_db(annotation_file)
-        return self.documentProc._model
+        return self.documentProc, self.documentProc._model
 
     def setup_pgvector_db(self, config: PGVectorConfig, embedding_dim: int = 384) -> None:
         """Create the pgvector extension and items table if they don't already exist.

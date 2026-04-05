@@ -20,12 +20,18 @@ DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres
 EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 EMBEDDING_BATCH_SIZE = 32
 
-# -- DB schema ---------------------------------------------------------
+# -- JQL Embeddings DB schema ---------------------------------------------------------
 JQL_TABLE            = "jql_annotations"
 JQL_COL_ANNOTATION   = "annotation"
 JQL_COL_JQL          = "jql"
 JQL_COL_EMBEDDING    = "embedding"
 JQL_SEARCH_LIMIT     = 5
+
+# -- Jira field Embeddings DB schema ---------------------------------------------------------
+JIRA_FIELD_TABLE            = "jira_field_annotations"
+JIRA_FIELD_COL_DESCRIPTION   = "description"
+JIRA_FIELD_COL_EMBEDDING    = "embedding"
+JIRA_FIELD_SEARCH_LIMIT     = 5
 
 # -- JQL annotation file -----------------------------------------------
 DEFAULT_ANNOTATION_FILE = os.getenv(
