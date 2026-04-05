@@ -28,10 +28,14 @@ JQL_COL_EMBEDDING    = "embedding"
 JQL_SEARCH_LIMIT     = 5
 
 # -- Jira field Embeddings DB schema ---------------------------------------------------------
-JIRA_FIELD_TABLE            = "jira_field_annotations"
+JIRA_FIELD_TABLE             = "jira_field_annotations"
 JIRA_FIELD_COL_DESCRIPTION   = "description"
-JIRA_FIELD_COL_EMBEDDING    = "embedding"
-JIRA_FIELD_SEARCH_LIMIT     = 5
+JIRA_FIELD_COL_EMBEDDING     = "embedding"
+JIRA_FIELD_SEARCH_LIMIT      = 1
+
+# Field IDs to exclude from embedding regardless of type.
+# Add custom fields that are internal, deprecated, or irrelevant to JQL queries.
+JIRA_FIELD_IGNORE_IDS: set[str] = {}
 
 # -- JQL annotation file -----------------------------------------------
 DEFAULT_ANNOTATION_FILE = os.getenv(

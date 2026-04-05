@@ -1,4 +1,4 @@
-
+import asyncio
 from jql_embeddings import JQL_Embeddings
 from jira_field_embeddings import Jira_Field_Embeddings
 from pathlib import Path
@@ -18,10 +18,19 @@ def test_JQL_Embeddings():
 
 def test_Jira_Field_Embeddings(documentProc, model):
     print("Testing Jira Field Embeddings!")
-
-    jira_field_embeddings = Jira_Field_Embeddings(embedconfig, documentProc)
+    jira_field_embeddings = Jira_Field_Embeddings(embedconfig, document_processor=documentProc)
     jira_field_embeddings.run(Path("data/jira_fields.json"))
+    rows, _ = asyncio.run(jira_field_embeddings.search_jira_fields(
+        "list all the issues that are assigned to me and status is blocked", model))
+    print_rows(rows)
+    rows, _ = asyncio.run(jira_field_embeddings.search_jira_fields(
+        "Show me all easy tickets", model))
+    print_rows(rows)
 
+def print_rows(rows):
+    print("-"*40)
+    for row in rows:
+        print(f"rows: {row}")
 
 if __name__ == "__main__":
     documentProc, model = test_JQL_Embeddings()

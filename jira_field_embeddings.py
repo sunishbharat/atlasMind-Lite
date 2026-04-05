@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlparse
 import psycopg2
+from psycopg2.extras import Json as PgJson
 
 import httpx
 from sentence_transformers import SentenceTransformer
@@ -18,8 +20,9 @@ from sentence_transformers import SentenceTransformer
 from settings import (
     DATABASE_URL, EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE,
     JIRA_FIELD_TABLE, JIRA_FIELD_COL_DESCRIPTION, JIRA_FIELD_COL_EMBEDDING, JIRA_FIELD_SEARCH_LIMIT,
+    JIRA_FIELD_IGNORE_IDS,
 )
-from seed_manager import compute_file_hash, needs_reseeding, save_hash
+from seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
 
 import re
 import logging
@@ -103,8 +106,10 @@ class Jira_Field_Embeddings:
     def seed_jira_field_embeddings_db(self, jira_fields_file: Path) -> SentenceTransformer:
         """Parse a Jira fields JSON file and load embeddings into the pgvector database.
 
-        Skips the encode + write cycle entirely if the file has not changed
-        since the last successful seed (hash-checked via seed_manager).
+        Skips the encode + write cycle entirely if neither the fields file nor
+        the allowed values file has changed since the last successful seed.
+        A combined hash of both files is stored so that running
+        fetch_and_save_allowed_values() automatically triggers a re-seed.
 
         Args:
             jira_fields_file: Path to the Jira fields JSON file from /rest/api/2/field.
@@ -113,13 +118,23 @@ class Jira_Field_Embeddings:
             SentenceTransformer: The embedding model used, for reuse in similarity search.
         """
         jira_fields_file = Path(jira_fields_file)
-        if not needs_reseeding(self.pgConfig, jira_fields_file):
+        av_file = jira_fields_file.parent / "jira_allowed_values.json"
+
+        # Combine hashes of both files so a change to either triggers re-seeding
+        combined_hash = compute_file_hash(jira_fields_file)
+        if av_file.exists():
+            av_hash = compute_file_hash(av_file)
+            combined_hash = hashlib.md5((combined_hash + av_hash).encode()).hexdigest()
+
+        stored = get_stored_hash(self.pgConfig, str(jira_fields_file))
+        if stored == combined_hash:
+            logger.warning("%s unchanged — skipping re-seed.", jira_fields_file.name)
             return self.documentProc._model
 
         records = self._parse_jira_fields_json(str(jira_fields_file))
         logger.info("Loaded %d Jira field records from %s", len(records), jira_fields_file.name)
         self._update_pgvector_from_records(records, self.model_name)
-        save_hash(self.pgConfig, str(jira_fields_file), compute_file_hash(jira_fields_file))
+        save_hash(self.pgConfig, str(jira_fields_file), combined_hash)
         return self.documentProc._model
     
 
@@ -141,130 +156,215 @@ class Jira_Field_Embeddings:
         return pgConfig
 
 
-   # async def generate_jql(self, query: str, model: SentenceTransformer) -> tuple[str, bool]:
-   #     """Generate a JQL string (or general answer) from a natural language query using RAG + Ollama.
+    async def search_jira_fields(
+        self,
+        query: str,
+        model: SentenceTransformer,
+        project_key: str = "",
+    ) -> tuple[list[tuple], SentenceTransformer]:
+        """Similarity search for Jira fields matching a natural language query.
 
-   #     Retrieves the top-5 most semantically similar (annotation, JQL) pairs from
-   #     pgvector, builds a few-shot prompt, and sends it to the local Ollama LLM.
+        Encodes the query and retrieves the nearest field records from pgvector,
+        ranked by embedding distance. An optional project_key narrows results
+        to a specific Jira instance.
 
-   #     The system prompt instructs Ollama to prefix JQL responses with ``<<JQL>>``.
-   #     If the response starts with that tag the tag is stripped and ``is_general``
-   #     is False.  Any other response is treated as a plain-text general answer and
-   #     ``is_general`` is True — the caller should display it directly without
-   #     hitting the Jira REST API.
-
-   #     Args:
-   #         query: The user's natural language query string.
-   #         model: SentenceTransformer model used to encode the query for similarity search.
-
-   #     Returns:
-   #         tuple[str, bool]: ``(text, is_general)`` — *text* is either a raw JQL
-   #         string or a plain-text answer; *is_general* is True for non-JQL responses.
-
-   #     Raises:
-   #         RuntimeError: If pgvector returns no examples (DB not loaded).
-   #         httpx.HTTPStatusError: If the Ollama API request fails.
-   #     """
-   #     examples, _ = self.search_sample_jql_embeddings_db(query, model)
-   #     if not examples:
-   #         raise RuntimeError("No examples found in pgvector — was the DB loaded?")
-
-   #     prompt = _build_prompt(query, examples)
-   #     logger.debug("Ollama prompt:\n%s", prompt)
-
-   #     async with httpx.AsyncClient(timeout=60) as client:
-   #         response = await client.post(
-   #             f"{OLLAMA_URL}/api/generate",
-   #             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": OLLAMA_TEMPERATURE}},
-   #         )
-   #         response.raise_for_status()
-   #         text = response.json()["response"].strip()
-
-   #     # Strip any accidental markdown fences
-   #     text = re.sub(r"^```[a-z]*\n?", "", text, flags=re.IGNORECASE).strip("`").strip()
-
-   #     if text.startswith(_JQL_TAG):
-   #         return text[len(_JQL_TAG):].strip(), False
-
-   #     logger.info("Non-JQL query detected — returning general answer without Jira REST API call.")
-   #     logger.info("Response: %s", text)
-   #     return text, True
-
-    def _parse_jira_fields_json(self, path: str, project_key: str = "") -> list[dict]:
-        """Parse a Jira fields JSON file (from /rest/api/2/field) into embeddable records.
-
-        Builds a rich natural language description for each field so that user
-        queries (e.g. "story points", "who it's assigned to") map well in
-        semantic search. The description is what gets embedded and stored.
+        model.encode is offloaded to a thread executor so it does not block
+        the event loop. The DB call via PGVectorClient is synchronous — replace
+        with an async DB client if full non-blocking behaviour is required.
 
         Args:
-            path: Filesystem path to the JSON file produced by the Jira REST API.
-            project_key: Logical label for this Jira instance/project (e.g.
-                "issues_apache_org"). Derived from the filename stem when omitted.
+            query: Natural language description of the field to find,
+                e.g. "who the ticket is assigned to" or "story points".
+            model: SentenceTransformer model used to encode the query.
+            project_key: When provided, restricts results to this project/instance.
+                Omit to search across all loaded instances.
 
         Returns:
-            list[dict]: One dict per field with keys matching the
-            ``jira_fields`` table schema:
-            ``project_key``, ``field_id``, ``field_name``, ``field_type``,
-            ``allowed_values``, ``description``, ``is_custom``.
-            ``allowed_values`` is always ``None`` — that data comes from a
-            separate ``/field/{id}/option`` API call not available here.
+            tuple[list[tuple], SentenceTransformer]: A 2-tuple of:
+                - list of (id, field_id, field_name, field_type, is_custom, description, distance) rows,
+                  ordered by is_custom ASC then distance — system fields first, custom as fallback
+                - the same model passed in, for chaining
+        """
+        loop = asyncio.get_event_loop()
+        query_emb = await loop.run_in_executor(
+            None,
+            lambda: model.encode(query, normalize_embeddings=True),
+        )
+
+        # System fields (is_custom = false) are ranked before custom fields.
+        # Distance is the tiebreaker within each group so the closest system
+        # field always beats a custom field with the same semantic relevance.
+        # A custom field only appears when no sufficiently close system field
+        # fills the result set.
+        if project_key:
+            sql = f"""
+                SELECT id, field_id, field_name, field_type, is_custom,
+                       {JIRA_FIELD_COL_DESCRIPTION},
+                       {JIRA_FIELD_COL_EMBEDDING} <-> %s AS distance
+                FROM {JIRA_FIELD_TABLE}
+                WHERE project_key = %s
+                ORDER BY is_custom ASC, {JIRA_FIELD_COL_EMBEDDING} <-> %s
+                LIMIT {JIRA_FIELD_SEARCH_LIMIT};
+            """
+            params = (query_emb, project_key, query_emb)
+        else:
+            sql = f"""
+                SELECT id, field_id, field_name, field_type, is_custom,
+                       {JIRA_FIELD_COL_DESCRIPTION},
+                       {JIRA_FIELD_COL_EMBEDDING} <-> %s AS distance
+                FROM {JIRA_FIELD_TABLE}
+                ORDER BY is_custom ASC, {JIRA_FIELD_COL_EMBEDDING} <-> %s
+                LIMIT {JIRA_FIELD_SEARCH_LIMIT};
+            """
+            params = (query_emb, query_emb)
+
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+
+        for id_, field_id, field_name, field_type, is_custom, description, dist in rows:
+            logger.info(
+                "field_id=%s  name=%r  type=%s  custom=%s  dist=%.4f",
+                field_id, field_name, field_type, is_custom, dist,
+            )
+
+        return rows, model
+
+
+    @staticmethod
+    def _build_description(
+        name: str,
+        field_id: str,
+        field_type: str,
+        is_custom: bool,
+        clause_names: list[str],
+        allowed_values: list[str] | None = None,
+    ) -> str:
+        """Build a rich natural language description for embedding.
+
+        Including allowed_values in the description lets the vector search map
+        queries like "show me open tickets" directly to the Status field and its
+        exact values, preventing the LLM from hallucinating values that do not
+        exist in the project.
+
+        Args:
+            name: Human-readable field name, e.g. "Status".
+            field_id: Field ID, e.g. "status" or "customfield_10023".
+            field_type: Schema type string, e.g. "string", "option", "number".
+            is_custom: True for custom fields, False for system fields.
+            clause_names: JQL clause names from the field metadata.
+            allowed_values: Discrete options for the field, e.g. ["To Do", "Done"].
+                            When None the allowed values line is omitted.
+
+        Returns:
+            Formatted description string ready for embedding.
+        """
+        custom_label = "custom" if is_custom else "system"
+
+        jql_clause = next(
+            (c for c in clause_names if not c.startswith("cf[")),
+            clause_names[0] if clause_names else field_id,
+        )
+        clause_str = (
+            ", ".join(f"'{c}'" for c in clause_names)
+            if len(clause_names) > 1
+            else f"'{jql_clause}'"
+        )
+
+        parts = [f"{name}: a {custom_label} field of type {field_type}."]
+
+        if allowed_values:
+            parts.append(f"Allowed values: {', '.join(allowed_values)}.")
+
+        parts.append(f"Used in JQL as {clause_str}.")
+        parts.append(f"Field ID: {field_id}.")
+
+        return " ".join(parts)
+
+
+    def _parse_jira_fields_json(
+        self,
+        path: str,
+        project_key: str = "",
+        allowed_values_json: str = "",
+    ) -> list[dict]:
+        """Parse a Jira fields JSON file and build embeddable records.
+
+        If an allowed values JSON file exists (produced by fetch_and_save_allowed_values
+        in jira_field_api.py), it is loaded and merged so each eligible field gets
+        a richer description that includes its discrete options. This lets the vector
+        search map queries like "show me open tickets" to Status and its exact values.
+
+        When no allowed values file is provided, the path is inferred by replacing
+        the fields filename with jira_fields_allowed_values.json in the same directory.
+        If that file does not exist the description is built without allowed values.
+
+        Args:
+            path: Filesystem path to the Jira fields JSON from /rest/api/2/field.
+            project_key: Logical label for this Jira instance. Derived from the
+                filename stem when omitted.
+            allowed_values_json: Path to the allowed values JSON written by
+                fetch_and_save_allowed_values(). Inferred from path when omitted.
+
+        Returns:
+            list[dict]: One dict per field with keys matching the jira_fields table schema.
         """
         import json as _json
 
-        with open(path, "r", encoding="utf-8") as f:
+        fields_path = Path(path)
+        with open(fields_path, "r", encoding="utf-8") as f:
             raw: dict = _json.load(f)
 
         if not project_key:
-            project_key = Path(path).stem  # e.g. "jira_fields_issues_apache_org_jira"
+            project_key = fields_path.stem
 
+        # Load allowed values file — infer path if not provided
+        av_path = Path(allowed_values_json) if allowed_values_json else \
+            fields_path.parent / "jira_allowed_values.json"
+
+        allowed_values_map: dict[str, list[str]] = {}
+        if av_path.exists():
+            allowed_values_map = _json.loads(av_path.read_text(encoding="utf-8"))
+            logger.info("Loaded allowed values for %d fields from %s", len(allowed_values_map), av_path.name)
+        else:
+            logger.info("Allowed values file not found at %s — descriptions built without options", av_path)
+
+        skipped = 0
         records: list[dict] = []
         for field_id, field in raw.items():
             name: str = field.get("name", field_id)
-            schema: dict = field.get("schema") or {}  # guard against explicit null in JSON
+            schema: dict = field.get("schema") or {}
             field_type: str = schema.get("type", "unknown")
-            items_type: str = schema.get("items", "")          # e.g. "user" for array-of-user
             is_custom: bool = bool(field.get("custom", False))
             clause_names: list[str] = field.get("clauseNames", [field_id])
 
-            # Prefer the human-readable clause name over the raw cf[...] form
-            jql_clause: str = next(
-                (c for c in clause_names if not c.startswith("cf[")),
-                clause_names[0] if clause_names else field_id,
-            )
+            # Skip fields explicitly listed in the ignore set
+            if field_id in JIRA_FIELD_IGNORE_IDS:
+                skipped += 1
+                continue
 
-            # Describe the type in plain English
-            if items_type:
-                type_label = f"array of {items_type}"
-            else:
-                type_label = field_type
-
-            custom_label = "custom" if is_custom else "system"
-
-            # If multiple clause names exist, list them all so queries using
-            # either form can match (e.g. both "cf[12312322]" and the display name)
-            if len(clause_names) > 1:
-                clause_str = ", ".join(f"'{c}'" for c in clause_names)
-            else:
-                clause_str = f"'{jql_clause}'"
-
-            description = (
-                f"{name}: a {custom_label} field of type {type_label}. "
-                f"Used in JQL as {clause_str}. "
-                f"Field ID: {field_id}."
-            )
+            # Skip custom fields with no human-readable clause name — only cf[...]
+            # entries indicate the field has never been given a meaningful alias
+            # and is unlikely to appear in user queries.
+            if is_custom and all(c.startswith("cf[") for c in clause_names):
+                skipped += 1
+                continue
+            allowed: list[str] | None = allowed_values_map.get(field_id) or None
 
             records.append({
                 "project_key": project_key,
                 "field_id": field_id,
                 "field_name": name,
                 "field_type": field_type,
-                "allowed_values": None,   # populated separately via /field/{id}/option
-                "description": description,
+                "allowed_values": allowed,
+                "description": self._build_description(
+                    name, field_id, field_type, is_custom, clause_names, allowed
+                ),
                 "is_custom": is_custom,
             })
 
-        logger.info("Parsed %d Jira fields from %s", len(records), Path(path).name)
+        logger.info("Parsed %d Jira fields from %s (%d skipped)", len(records), fields_path.name, skipped)
         return records
 
 
@@ -324,7 +424,7 @@ class Jira_Field_Embeddings:
                             record["field_id"],
                             record["field_name"],
                             record["field_type"],
-                            record["allowed_values"],   # None → SQL NULL; pass psycopg2.extras.Json(...) when values exist
+                            PgJson(record["allowed_values"]) if record["allowed_values"] is not None else None,
                             record["description"],
                             record["is_custom"],
                             emb.tolist(),
