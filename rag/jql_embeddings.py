@@ -19,7 +19,7 @@ from settings import (
     DATABASE_URL, EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE,
     JQL_TABLE, JQL_COL_ANNOTATION, JQL_COL_JQL, JQL_COL_EMBEDDING, JQL_SEARCH_LIMIT,
 )
-from seed_manager import compute_file_hash, needs_reseeding, save_hash
+from rag.seed_manager import compute_file_hash, needs_reseeding, save_hash
 
 import re
 import logging

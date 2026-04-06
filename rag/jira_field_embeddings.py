@@ -22,8 +22,8 @@ from settings import (
     JIRA_FIELD_TABLE, JIRA_FIELD_COL_DESCRIPTION, JIRA_FIELD_COL_EMBEDDING, JIRA_FIELD_SEARCH_LIMIT,
     JIRA_FIELD_IGNORE_IDS,
 )
-from seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
-from jira_field_api import fetch_and_save_fields, fetch_and_save_allowed_values
+from rag.seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
+from jira.jira_field_api import fetch_and_save_fields, fetch_and_save_allowed_values
 from settings import JIRA_ALLOWED_VALUES_FILENAME
 
 import re

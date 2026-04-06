@@ -30,7 +30,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.rule import Rule
 
-from atlasmind import AtlasMind
+from core.atlasmind import AtlasMind
 from dconfig import EmbeddingsConfig
 from settings import EMBEDDING_MODEL, OLLAMA_MODEL
 

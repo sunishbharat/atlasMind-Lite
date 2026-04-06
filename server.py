@@ -3,9 +3,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 
-from atlasmind import AtlasMind, normalize_issue
+from core.atlasmind import AtlasMind, normalize_issue
 from dconfig import EmbeddingsConfig
-from models import ChartSpec, QueryRequest, QueryResponse
+from core.models import ChartSpec, QueryRequest, QueryResponse
 from config.jira_config import load_active_profile
 from settings import EMBEDDING_MODEL
 

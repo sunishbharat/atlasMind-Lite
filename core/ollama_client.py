@@ -36,6 +36,7 @@ class OllamaClient:
         # read timeout. OLLAMA_TIMEOUT controls the read budget (default 120s,
         # override via JQL_OLLAMA_TIMEOUT env var).
         timeout = httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=5.0)
+        logger.info(f"Ollama client generating response using model : {self.model}")
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(

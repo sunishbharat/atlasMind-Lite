@@ -7,9 +7,9 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 from document_processor import DocumentProcessor
-from jira_field_embeddings import Jira_Field_Embeddings
-from jql_embeddings import JQL_Embeddings
-from ollama_client import OllamaClient
+from rag.jira_field_embeddings import Jira_Field_Embeddings
+from rag.jql_embeddings import JQL_Embeddings
+from core.ollama_client import OllamaClient
 from dconfig import EmbeddingsConfig
 from config.jira_config import load_active_profile, get_data_dir
 from settings import DEFAULT_ANNOTATION_FILE, JIRA_FIELDS_FILENAME, SYSTEM_PROMPT_FILE, MAX_RESULTS
@@ -186,9 +186,22 @@ class AtlasMind:
                     headers={"Accept": "application/json"},
                 )
                 response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # Extract the error message from the Jira response body when available
+            jira_error = ""
+            try:
+                body = exc.response.json()
+                messages = body.get("errorMessages", [])
+                errors = body.get("errors", {})
+                jira_error = "; ".join(messages + list(errors.values()))
+            except Exception:
+                pass
+            msg = jira_error or str(exc)
+            logger.warning("Jira API error (HTTP %s): %s", exc.response.status_code, msg)
+            raise ValueError(f"Jira rejected the JQL: {msg}") from exc
         except httpx.HTTPError as exc:
             logger.warning("Jira REST API call failed: %s", exc)
-            return {"jql": jql, "raw_issues": [], "total": 0, "shown": 0}
+            raise ValueError(f"Jira connection failed: {exc}") from exc
 
         payload    = response.json()
         raw_issues = payload.get("issues", [])
