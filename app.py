@@ -30,7 +30,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.rule import Rule
 
-from atlasmind import AtlasMind, JqlResponse
+from atlasmind import AtlasMind
 from dconfig import EmbeddingsConfig
 from settings import EMBEDDING_MODEL, OLLAMA_MODEL
 
@@ -75,13 +75,17 @@ def _print_banner() -> None:
     console.print(BORDER_DWN)
 
 
-def _print_result(result: JqlResponse) -> None:
+def _print_result(llm_result, jira_result: dict | None) -> None:
     console.print(Rule(style="dim cyan"))
-    if result.jql:
-        console.print(f"\n[bold cyan]JQL[/]    : {result.jql}")
-        if result.chart_spec:
-            console.print(f"[bold cyan]Chart[/]  : {json.dumps(result.chart_spec)}")
-    console.print(f"[bold cyan]Answer[/] : {result.answer}\n")
+    if llm_result.jql:
+        console.print(f"\n[bold cyan]JQL[/]    : {llm_result.jql}")
+        if llm_result.chart_spec:
+            console.print(f"[bold cyan]Chart[/]  : {json.dumps(llm_result.chart_spec)}")
+        if jira_result:
+            shown = jira_result.get("shown", 0)
+            total = jira_result.get("total", 0)
+            console.print(f"[bold cyan]Issues[/] : {shown} of {total} returned")
+    console.print(f"[bold cyan]Answer[/] : {llm_result.answer}\n")
     console.print(Rule(style="dim cyan"))
 
 
@@ -128,8 +132,8 @@ async def repl(atlasmind: AtlasMind) -> None:
         console.print()
 
         try:
-            result = await atlasmind.generate_jql(user_input)
-            _print_result(result)
+            llm_result, jira_result = await atlasmind.generate_jql(user_input)
+            _print_result(llm_result, jira_result)
         except KeyboardInterrupt:
             console.print("\n[dim][interrupted][/]")
         except Exception as exc:
@@ -140,10 +144,10 @@ async def repl(atlasmind: AtlasMind) -> None:
 
 async def run_query(atlasmind: AtlasMind, query: str) -> None:
     """Run a single query and print the JQL and answer."""
-    result = await atlasmind.generate_jql(query)
-    if result.jql:
-        print(f"JQL    : {result.jql}")
-    print(f"Answer : {result.answer}")
+    llm_result, jira_result = await atlasmind.generate_jql(query)
+    if llm_result.jql:
+        print(f"JQL    : {llm_result.jql}")
+    print(f"Answer : {llm_result.answer}")
 
 
 def run_server() -> None:

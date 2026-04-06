@@ -49,4 +49,5 @@ def load_active_profile() -> dict:
     """
     data = json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
     default = data["default"]
-    return data["profiles"][default]
+    profile = data["profiles"][default]
+    return {"name": default, **profile}

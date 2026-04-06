@@ -15,7 +15,7 @@ OLLAMA_URL         = os.getenv("JQL_OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5-coder:7b-instruct")
 #OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen3.5:9b")
 OLLAMA_TEMPERATURE = float(os.getenv("JQL_OLLAMA_TEMPERATURE", "0"))
-OLLAMA_TIMEOUT     = int(os.getenv("JQL_OLLAMA_TIMEOUT", "90"))
+OLLAMA_TIMEOUT     = int(os.getenv("JQL_OLLAMA_TIMEOUT", "120"))
 
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")
@@ -33,7 +33,7 @@ JQL_SEARCH_LIMIT     = 5
 JIRA_FIELD_TABLE             = "jira_field_annotations"
 JIRA_FIELD_COL_DESCRIPTION   = "description"
 JIRA_FIELD_COL_EMBEDDING     = "embedding"
-JIRA_FIELD_SEARCH_LIMIT      = 1
+JIRA_FIELD_SEARCH_LIMIT      = 3
 
 # Field IDs to exclude from embedding regardless of type.
 # Add custom fields that are internal, deprecated, or irrelevant to JQL queries.
