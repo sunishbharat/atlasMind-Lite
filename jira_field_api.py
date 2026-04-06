@@ -20,9 +20,55 @@ import json
 import logging
 from pathlib import Path
 import httpx
-from config.jira_config import _SYSTEM_FIELD_ENDPOINTS
+import requests
+from config.jira_config import _SYSTEM_FIELD_ENDPOINTS, load_active_profile, get_data_dir
+from settings import JIRA_FIELDS_FILENAME, JIRA_ALLOWED_VALUES_FILENAME
 
 logger = logging.getLogger(__name__)
+
+
+def fetch_and_save_fields(output_path: Path = None) -> Path:
+    """Fetch all Jira fields from the active profile and save to a JSON file.
+
+    Calls /rest/api/2/field on the Jira instance defined in config/profiles.json
+    (active profile). The response list is converted to a dict keyed by field ID
+    to match the format expected by _parse_jira_fields_json().
+
+    If output_path is not provided it defaults to the domain-scoped directory:
+        data/{domain_slug}/jira_fields.json
+
+    Args:
+        output_path: Destination path for the fields JSON file. Derived from
+            the active profile's jira_url when omitted.
+
+    Returns:
+        Path: The path the file was written to.
+
+    Raises:
+        requests.HTTPError: If the Jira API returns a non-2xx response.
+    """
+    profile = load_active_profile()
+    base_url = profile["jira_url"].rstrip("/")
+    email = profile.get("email", "")
+    token = profile.get("token", "")
+    auth = (email, token) if email and token else None
+
+    if output_path is None:
+        output_path = get_data_dir(profile["jira_url"]) / JIRA_FIELDS_FILENAME
+
+    url = f"{base_url}/rest/api/2/field"
+    logger.info("Fetching Jira fields from %s", url)
+
+    response = requests.get(url, auth=auth, headers={"Accept": "application/json"}, timeout=30)
+    response.raise_for_status()
+
+    fields_list: list[dict] = response.json()
+    fields_dict = {f["id"]: f for f in fields_list}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(fields_dict, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Saved %d Jira fields to %s", len(fields_dict), output_path)
+    return output_path
 
 
 async def fetch_field_allowed_values(
@@ -92,10 +138,10 @@ def _resolve_endpoint(field_id: str, field_type: str) -> str | None:
 
 
 async def fetch_and_save_allowed_values(
-    fields_json: Path = Path("data/jira_fields.json"),
-    output_json: Path = Path("data/jira_allowed_values.json"),
-    base_url: str = "https://issues.apache.org/jira",
-    auth: tuple[str, str] = ("", ""),
+    fields_json: Path = None,
+    output_json: Path = None,
+    base_url: str = None,
+    auth: tuple[str, str] = None,
 ) -> None:
     """Fetch allowed values for all eligible fields and write them to a JSON file.
 
@@ -112,6 +158,20 @@ async def fetch_and_save_allowed_values(
         base_url: Jira instance base URL.
         auth: (username, api_token). Leave empty for public Jira instances.
     """
+    profile = load_active_profile()
+    data_dir = get_data_dir(profile["jira_url"])
+
+    if fields_json is None:
+        fields_json = data_dir / JIRA_FIELDS_FILENAME
+    if output_json is None:
+        output_json = data_dir / JIRA_ALLOWED_VALUES_FILENAME
+    if base_url is None:
+        base_url = profile["jira_url"]
+    if auth is None:
+        email = profile.get("email", "")
+        token = profile.get("token", "")
+        auth = (email, token)
+
     raw: dict = json.loads(fields_json.read_text(encoding="utf-8"))
     has_auth = any(auth)
 

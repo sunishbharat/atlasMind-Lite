@@ -23,6 +23,8 @@ from settings import (
     JIRA_FIELD_IGNORE_IDS,
 )
 from seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
+from jira_field_api import fetch_and_save_fields, fetch_and_save_allowed_values
+from settings import JIRA_ALLOWED_VALUES_FILENAME
 
 import re
 import logging
@@ -61,7 +63,13 @@ class Jira_Field_Embeddings:
 
         path = Path(jira_fields_file)
         if not path.exists():
-            raise FileNotFoundError(f"Jira fields file not found: {path}")
+            logger.info("%s not found — fetching from Jira REST API...", path.name)
+            fetch_and_save_fields(path)
+
+        av_file = path.parent / JIRA_ALLOWED_VALUES_FILENAME
+        if not av_file.exists():
+            logger.info("%s not found — fetching allowed values from Jira REST API...", av_file.name)
+            asyncio.run(fetch_and_save_allowed_values(fields_json=path, output_json=av_file))
 
         self.seed_jira_field_embeddings_db(jira_fields_file)
         return self.documentProc._model
@@ -118,7 +126,7 @@ class Jira_Field_Embeddings:
             SentenceTransformer: The embedding model used, for reuse in similarity search.
         """
         jira_fields_file = Path(jira_fields_file)
-        av_file = jira_fields_file.parent / "jira_allowed_values.json"
+        av_file = jira_fields_file.parent / JIRA_ALLOWED_VALUES_FILENAME
 
         # Combine hashes of both files so a change to either triggers re-seeding
         combined_hash = compute_file_hash(jira_fields_file)
@@ -321,7 +329,7 @@ class Jira_Field_Embeddings:
 
         # Load allowed values file — infer path if not provided
         av_path = Path(allowed_values_json) if allowed_values_json else \
-            fields_path.parent / "jira_allowed_values.json"
+            fields_path.parent / JIRA_ALLOWED_VALUES_FILENAME
 
         allowed_values_map: dict[str, list[str]] = {}
         if av_path.exists():

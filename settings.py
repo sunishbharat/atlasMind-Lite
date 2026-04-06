@@ -45,11 +45,13 @@ DEFAULT_ANNOTATION_FILE = os.getenv(
     str(_ROOT / "data" / "jira_jql_annotated_queries.md"),
 )
 
-# -- Jira fields file --------------------------------------------------
-DEFAULT_JIRA_FIELDS_FILE = os.getenv(
-    "JIRA_FIELDS_FILE",
-    str(_ROOT / "data" / "jira_fields.json"),
-)
+# -- Data directory (domain-scoped subdirs are created inside here) ----
+DATA_DIR = _ROOT / "data"
+
+# -- File names — change here to rename files project-wide ------------
+JIRA_FIELDS_FILENAME         = "jira_fields.json"
+JIRA_ALLOWED_VALUES_FILENAME = "jira_allowed_values.json"
+SYSTEM_PROMPT_FILE           = str(_ROOT / "config" / "system_prompt.md")
 
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"

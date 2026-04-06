@@ -9,7 +9,8 @@ from jira_field_embeddings import Jira_Field_Embeddings
 from jql_embeddings import JQL_Embeddings
 from ollama_client import OllamaClient
 from dconfig import EmbeddingsConfig
-from settings import DEFAULT_ANNOTATION_FILE, DEFAULT_JIRA_FIELDS_FILE
+from config.jira_config import load_active_profile, get_data_dir
+from settings import DEFAULT_ANNOTATION_FILE, JIRA_FIELDS_FILENAME, SYSTEM_PROMPT_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class AtlasMind:
         self.embedconfig = embedconfig
         self.ollama_client = OllamaClient()
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
-        self.system_prompt_dir = Path("config/system_prompt.md")
+        self.system_prompt_dir = Path(SYSTEM_PROMPT_FILE)
 
         # Both embedding classes share the same DocumentProcessor so the
         # SentenceTransformer model is only loaded once.
@@ -35,7 +36,10 @@ class AtlasMind:
     def run(self):
         self.ollama_client.test_connection()
         self.jql_embeddings.run(Path(DEFAULT_ANNOTATION_FILE))
-        self.jira_field_embeddings.run(Path(DEFAULT_JIRA_FIELDS_FILE))
+
+        profile = load_active_profile()
+        fields_file = get_data_dir(profile["jira_url"]) / JIRA_FIELDS_FILENAME
+        self.jira_field_embeddings.run(fields_file)
 
     async def _build_prompt(self, query: str) -> str:
         """Build a RAG-grounded prompt combining system instructions with retrieved context.

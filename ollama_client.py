@@ -50,5 +50,9 @@ class OllamaClient:
             ) from e
         except httpx.ConnectError as e:
             raise OllamaUnavailable("Ollama server is not reachable") from e
-        return response.json()["response"]
+        text = response.json()["response"].strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]   # drop opening fence line (```json)
+            text = text.rsplit("```", 1)[0]   # drop closing fence
+        return text.strip()
     
