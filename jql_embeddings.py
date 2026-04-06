@@ -35,11 +35,11 @@ logger = logging.getLogger(__name__)
 
 
 class JQL_Embeddings:
-    def __init__(self, config: EmbeddingsConfig=None):
+    def __init__(self, config: EmbeddingsConfig=None, documentProc: DocumentProcessor=None):
         self.model_name = EMBEDDING_MODEL
         self.config = config if config else EmbeddingsConfig(model_name=self.model_name)
 
-        self.documentProc = DocumentProcessor(embedconfig=self.config)
+        self.documentProc = documentProc if documentProc else DocumentProcessor(embedconfig=self.config)
         self.embedding_dim = self.documentProc._model.get_sentence_embedding_dimension()
         self.pgConfig = self.get_pgConfig_env()
         logger.info(f"Embedding dimension: {self.embedding_dim}")
@@ -167,55 +167,6 @@ class JQL_Embeddings:
 
         return rows, model
 
-
-    async def generate_jql(self, query: str, model: SentenceTransformer) -> tuple[str, bool]:
-        """Generate a JQL string (or general answer) from a natural language query using RAG + Ollama.
-
-        Retrieves the top-5 most semantically similar (annotation, JQL) pairs from
-        pgvector, builds a few-shot prompt, and sends it to the local Ollama LLM.
-
-        The system prompt instructs Ollama to prefix JQL responses with ``<<JQL>>``.
-        If the response starts with that tag the tag is stripped and ``is_general``
-        is False.  Any other response is treated as a plain-text general answer and
-        ``is_general`` is True — the caller should display it directly without
-        hitting the Jira REST API.
-
-        Args:
-            query: The user's natural language query string.
-            model: SentenceTransformer model used to encode the query for similarity search.
-
-        Returns:
-            tuple[str, bool]: ``(text, is_general)`` — *text* is either a raw JQL
-            string or a plain-text answer; *is_general* is True for non-JQL responses.
-
-        Raises:
-            RuntimeError: If pgvector returns no examples (DB not loaded).
-            httpx.HTTPStatusError: If the Ollama API request fails.
-        """
-        examples, _ = self.search_sample_jql_embeddings_db(query, model)
-        if not examples:
-            raise RuntimeError("No examples found in pgvector — was the DB loaded?")
-
-        prompt = _build_prompt(query, examples)
-        logger.debug("Ollama prompt:\n%s", prompt)
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "options": {"temperature": OLLAMA_TEMPERATURE}},
-            )
-            response.raise_for_status()
-            text = response.json()["response"].strip()
-
-        # Strip any accidental markdown fences
-        text = re.sub(r"^```[a-z]*\n?", "", text, flags=re.IGNORECASE).strip("`").strip()
-
-        if text.startswith(_JQL_TAG):
-            return text[len(_JQL_TAG):].strip(), False
-
-        logger.info("Non-JQL query detected — returning general answer without Jira REST API call.")
-        logger.info("Response: %s", text)
-        return text, True
 
     def _parse_jql_annotations(self, path: str) -> list[dict[str, str]]:
         """Parse a JQL annotation file and return comment/JQL pairs.

@@ -19,18 +19,10 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-
 import httpx
+from config.jira_config import _SYSTEM_FIELD_ENDPOINTS
 
 logger = logging.getLogger(__name__)
-
-# System fields that have their own REST endpoints
-_SYSTEM_FIELD_ENDPOINTS: dict[str, str] = {
-    "status":      "/rest/api/2/status",
-    "priority":    "/rest/api/2/priority",
-    "resolution":  "/rest/api/2/resolution",
-    "issuetype":   "/rest/api/2/issuetype",
-}
 
 
 async def fetch_field_allowed_values(
@@ -175,17 +167,3 @@ def _extract_names(data: list | dict) -> list[str]:
         return sorted(item["value"] for item in data["values"] if "value" in item)
 
     return []
-
-
-if __name__ == "__main__":
-    import os
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-    jira_auth = (
-        os.getenv("JIRA_USER", ""),
-        os.getenv("JIRA_API_TOKEN", ""),
-    )
-    if not any(jira_auth):
-        logger.warning("JIRA_USER and JIRA_API_TOKEN not set — requests may fail with 401")
-
-    asyncio.run(fetch_and_save_allowed_values(auth=jira_auth))

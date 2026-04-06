@@ -13,7 +13,9 @@ _ROOT = Path(__file__).parent
 # -- Ollama / LLM -----------------------------------------------------
 OLLAMA_URL         = os.getenv("JQL_OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5-coder:7b-instruct")
+#OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen3.5:9b")
 OLLAMA_TEMPERATURE = float(os.getenv("JQL_OLLAMA_TEMPERATURE", "0"))
+OLLAMA_TIMEOUT     = int(os.getenv("JQL_OLLAMA_TIMEOUT", "90"))
 
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")
@@ -40,7 +42,13 @@ JIRA_FIELD_IGNORE_IDS: set[str] = {}
 # -- JQL annotation file -----------------------------------------------
 DEFAULT_ANNOTATION_FILE = os.getenv(
     "JQL_ANNOTATION_FILE",
-    str(_ROOT / "data" / "jira-jql-annotated-queries.md"),
+    str(_ROOT / "data" / "jira_jql_annotated_queries.md"),
+)
+
+# -- Jira fields file --------------------------------------------------
+DEFAULT_JIRA_FIELDS_FILE = os.getenv(
+    "JIRA_FIELDS_FILE",
+    str(_ROOT / "data" / "jira_fields.json"),
 )
 
 # -- Jira query defaults -----------------------------------------------

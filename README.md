@@ -1,11 +1,11 @@
 # aMind-partial
 
-A JQL (Jira Query Language) generator that translates natural language queries into JQL using RAG (Retrieval-Augmented Generation) with pgvector and a local Ollama LLM.
+A natural language to JQL (Jira Query Language) generator using RAG (Retrieval-Augmented Generation) with pgvector and a local Ollama LLM. Returns structured JSON with a JQL query, a chart specification, and a plain-text answer.
 
 ## Prerequisites
 
 - PostgreSQL with the [`pgvector`](https://github.com/pgvector/pgvector) extension
-- [Ollama](https://ollama.ai) running locally with a model loaded (default: `qwen2.5-coder:7b-instruct`)
+- [Ollama](https://ollama.ai) running locally with a model loaded (default: `qwen3.5:9b`)
 - Python 3.12+, [`uv`](https://docs.astral.sh/uv/)
 
 ## Setup
@@ -21,85 +21,90 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/jql_vectordb` | pgvector connection string |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | SentenceTransformer model name |
 | `JQL_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
-| `JQL_LOCAL_MODEL` | `qwen2.5-coder:7b-instruct` | Ollama model to use |
-| `JQL_ANNOTATION_FILE` | `data/jira-jql-annotated-queries.md` | Path to JQL annotation file |
+| `JQL_LOCAL_MODEL` | `qwen3.5:9b` | Ollama model to use |
+| `JQL_OLLAMA_TIMEOUT` | `120` | Read timeout in seconds for LLM inference (increase for large prompts) |
+| `JQL_ANNOTATION_FILE` | `data/jira_jql_annotated_queries.md` | Path to JQL annotation file |
+| `JIRA_FIELDS_FILE` | `data/jira_fields.json` | Path to Jira fields JSON from `/rest/api/2/field` |
 
-## Using `JQL_Embeddings`
+## Architecture
 
-### 1. Seed the database
+**Data flow:**
 
-Call `run()` once on startup. It creates the pgvector schema and loads the annotation file into the database. Re-seeding is skipped automatically if the annotation file hasn't changed (hash-checked).
+1. `JQL_Embeddings.run()` seeds pgvector with `(annotation, JQL)` pairs parsed from the annotation file
+2. `Jira_Field_Embeddings.run()` seeds pgvector with Jira field metadata (name, type, allowed values) from the fields JSON
+3. At query time, `AtlasMind._build_prompt()` retrieves the top-N most semantically similar JQL examples and Jira fields via vector similarity search
+4. The assembled prompt (system instructions + fields + examples + query) is sent to Ollama
+5. Ollama returns structured JSON with `jql`, `chart_spec`, and `answer`
 
-```python
-from pathlib import Path
-from jql_embeddings import JQL_Embeddings
-from dconfig import EmbeddingsConfig
+Both seeding steps are hash-gated — re-encoding is skipped if the source files have not changed since the last run.
 
-config = EmbeddingsConfig(model_name="BAAI/bge-small-en-v1.5")
-jql = JQL_Embeddings(config)
-model = jql.run(Path("data/jira-jql-annotated-queries.md"))
-```
+**Key files:**
 
-`run()` returns the loaded `SentenceTransformer` model for reuse in search/generation.
+| File | Role |
+|------|------|
+| `atlasmind.py` | Top-level orchestrator — `run()` seeds both DBs, `generate_jql()` is the query entry point |
+| `jql_embeddings.py` | Seeds and searches the JQL annotation pgvector table |
+| `jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table |
+| `ollama_client.py` | Sync `test_connection()` and async `generate_jql()` against the Ollama API |
+| `seed_manager.py` | MD5 hash-based seeding gate stored in a `seed_metadata` pgvector table |
+| `dconfig.py` | Pydantic `EmbeddingsConfig` model |
+| `settings.py` | All defaults, overridable via environment variables |
 
-### 2. Search for similar JQL examples
-
-Encode a natural language query and retrieve the top-5 nearest annotation/JQL pairs from pgvector:
-
-```python
-rows, model = jql.search_sample_jql_embeddings_db("open bugs assigned to me", model)
-for id_, annotation, jql_text, distance in rows:
-    print(f"{annotation!r} → {jql_text!r}  (dist={distance:.4f})")
-```
-
-### 3. Generate JQL from natural language
-
-Send the query through the full RAG pipeline (similarity search → few-shot prompt → Ollama):
+## Usage
 
 ```python
 import asyncio
-
-text, is_general = asyncio.run(jql.generate_jql("open bugs assigned to me", model))
-
-if is_general:
-    print("General answer:", text)
-else:
-    print("JQL:", text)
-```
-
-`is_general=False` means the response is a JQL string ready to send to the Jira REST API.  
-`is_general=True` means Ollama returned a plain-text answer (e.g. for questions like "what is JQL?").
-
-### Full example
-
-```python
-import asyncio
-from pathlib import Path
-from jql_embeddings import JQL_Embeddings
+from atlasmind import AtlasMind
 from dconfig import EmbeddingsConfig
 
 config = EmbeddingsConfig(model_name="BAAI/bge-small-en-v1.5")
-jql = JQL_Embeddings(config)
+atlasmind = AtlasMind(config)
 
-# Seed DB (skipped automatically if annotation file unchanged)
-model = jql.run(Path("data/jira-jql-annotated-queries.md"))
+# Seed both pgvector tables (skipped if source files unchanged)
+atlasmind.run()
 
-# Generate JQL
-text, is_general = asyncio.run(jql.generate_jql("bugs created this week", model))
-print(text)
+# Generate JQL from a natural language query
+result = asyncio.run(atlasmind.generate_jql(
+    "List open bugs assigned to me, grouped by priority"
+))
+
+print(result.jql)         # assignee = currentUser() AND ...
+print(result.chart_spec)  # {"type": "bar", "x_field": "priority", ...}
+print(result.answer)      # "Open bugs assigned to the current user, grouped by priority"
 ```
 
-## Annotation file format
+### Response model required for frontend UI
 
-The annotation file is a Markdown file with `/* comment */\nJQL` pairs:
+`generate_jql()` returns a `JqlResponse` Pydantic model:
+
+```python
+class JqlResponse(BaseModel):
+    jql: str | None        # None when the query is not Jira-related
+    chart_spec: dict | None
+    answer: str
+```
+
+For general (non-Jira) questions, `jql` and `chart_spec` are `None` and `answer` contains the plain-text response.
+
+## Data files
+
+### JQL annotation file (`data/jira_jql_annotated_queries.md`)
+
+Markdown file with `/* comment */\nJQL` pairs used as few-shot examples:
 
 ```
 /* open bugs assigned to me */
-assignee = currentUser() AND status = Open
+assignee = currentUser() AND issuetype = Bug AND status != Done ORDER BY created DESC
 
 /* high priority tickets created this week */
-priority = High AND created >= -7d ORDER BY created DESC
+priority = High AND created >= startOfWeek() ORDER BY created DESC
 ```
+
+### Jira fields file (`data/jira_fields.json`)
+
+JSON from the Jira REST API endpoint `/rest/api/2/field`, keyed by field ID. Used to ground the LLM in the exact field IDs and allowed values available in your Jira instance.
+
+An optional `data/jira_allowed_values.json` (produced by `jira_field_api.py`) is merged in to enrich field descriptions with discrete option lists (e.g. status values, issue types).
 
 ## Running tests
 

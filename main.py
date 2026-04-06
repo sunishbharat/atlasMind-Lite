@@ -4,6 +4,7 @@ from jira_field_embeddings import Jira_Field_Embeddings
 from pathlib import Path
 from dconfig import EmbeddingsConfig
 from settings import EMBEDDING_MODEL
+from atlasmind import AtlasMind
 
 
 embedconfig = EmbeddingsConfig(model_name="BAAI/bge-small-en-v1.5")
@@ -32,6 +33,16 @@ def print_rows(rows):
     for row in rows:
         print(f"rows: {row}")
 
+
+def test_atlasmind():
+    embedconfig = EmbeddingsConfig(model_name="BAAI/bge-small-en-v1.5")
+    atlasmind = AtlasMind(embedconfig)
+    atlasmind.run()
+    query = "List the 100 issues with major or minor priority for project ZOOKEEPER, create a bar graph grouped by month."
+    print(asyncio.run(atlasmind.generate_jql(query)))
+
+
 if __name__ == "__main__":
-    documentProc, model = test_JQL_Embeddings()
-    test_Jira_Field_Embeddings(documentProc, model)
+    test_atlasmind()
+    #documentProc, model = test_JQL_Embeddings()
+    #test_Jira_Field_Embeddings(documentProc, model)
