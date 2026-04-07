@@ -54,6 +54,10 @@ _FIELD_HINTS: list[tuple[list[str], str]] = [
     (["parent"],                    "parent"),
     (["comment"],                   "comments"),
     (["description", "detail"],     "description"),
+    (["effort", "days", "day", "completion time", "time to close",
+       "took", "longest", "duration", "cycle time"], "effort_days"),
+    (["effort hour", "hours", "hour"], "effort_hours"),
+    (["age", "open for", "how long open"], "age_days"),
 ]
 
 

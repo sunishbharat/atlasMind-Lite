@@ -12,12 +12,15 @@ from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
 from dconfig import EmbeddingsConfig
 from config.jira_config import load_active_profile, get_data_dir
+from jira.jira_compute import enrich_issue
 from settings import DEFAULT_ANNOTATION_FILE, JIRA_FIELDS_FILENAME, SYSTEM_PROMPT_FILE, MAX_RESULTS
 
 logger = logging.getLogger(__name__)
 
 _LIMIT_RE = re.compile(r"\b(?:top|first|last|limit|show|list|get|fetch)?\s*(\d+)\s*(?:issues?|tickets?|results?|items?)?\b", re.IGNORECASE)
 _JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+\s*$", re.IGNORECASE)
+# Strip ORDER BY clauses that contain arithmetic operators — Jira rejects them.
+_JQL_ARITHMETIC_ORDER_RE = re.compile(r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE)
 _MAX_ALLOWED = 500
 
 
@@ -43,7 +46,7 @@ def normalize_issue(jira_issue: dict) -> dict:
     if isinstance(sprint_field, list) and sprint_field:
         sprint = sprint_field[-1].get("name") if isinstance(sprint_field[-1], dict) else None
 
-    return {
+    issue = {
         "key":            jira_issue.get("key"),
         "summary":        fields.get("summary"),
         "description":    fields.get("description"),
@@ -70,6 +73,8 @@ def normalize_issue(jira_issue: dict) -> dict:
             for c in (fields.get("comment") or {}).get("comments", [])
         ],
     }
+    issue.update(enrich_issue(fields))
+    return issue
 
 
 class AtlasMind:
@@ -243,6 +248,10 @@ class AtlasMind:
             clean_jql = _JQL_LIMIT_RE.sub("", llm_result.jql).strip()
             if clean_jql != llm_result.jql:
                 logger.info("JQL after LIMIT strip: %s", clean_jql)
+            stripped = _JQL_ARITHMETIC_ORDER_RE.sub("", clean_jql).strip()
+            if stripped != clean_jql:
+                logger.warning("JQL contained arithmetic in ORDER BY — stripped: %s", clean_jql)
+                clean_jql = stripped
             jira_result = await self._execute_query(clean_jql, max_results=_parse_limit(query))
 
         return llm_result, jira_result
