@@ -104,7 +104,7 @@ async def fetch_field_allowed_values(
         return []
 
     url = f"{base_url.rstrip('/')}{endpoint}"
-    logger.info("Fetching allowed values for field_id=%s from %s", field_id, url)
+    logger.debug("Fetching allowed values for field_id=%s from %s", field_id, url)
 
     headers = {"Accept": "application/json"}
     async with httpx.AsyncClient(timeout=30) as client:
@@ -122,7 +122,7 @@ async def fetch_field_allowed_values(
 
     response.raise_for_status()
     values = _extract_names(response.json())
-    logger.info("field_id=%s  allowed_values=%s", field_id, values)
+    logger.debug("field_id=%s  allowed_values=%s", field_id, values)
     return values
 
 
@@ -191,7 +191,7 @@ async def fetch_and_save_allowed_values(
             continue
         eligible.append((field_id, field_type))
 
-    logger.info("Fetching allowed values for %d eligible fields (auth=%s)", len(eligible), has_auth)
+    logger.debug("Fetching allowed values for %d eligible fields (auth=%s)", len(eligible), has_auth)
 
     async def _fetch(field_id: str, field_type: str) -> tuple[str, list[str]]:
         values = await fetch_field_allowed_values(
@@ -210,7 +210,7 @@ async def fetch_and_save_allowed_values(
 
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(allowed, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Saved allowed values for %d fields to %s", len(allowed), output_json)
+    logger.debug("Saved allowed values for %d fields to %s", len(allowed), output_json)
 
 
 def _extract_names(data: list | dict) -> list[str]:
