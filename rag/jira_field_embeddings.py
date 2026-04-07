@@ -69,7 +69,14 @@ class Jira_Field_Embeddings:
         av_file = path.parent / JIRA_ALLOWED_VALUES_FILENAME
         if not av_file.exists():
             logger.info("%s not found — fetching allowed values from Jira REST API...", av_file.name)
-            asyncio.run(fetch_and_save_allowed_values(fields_json=path, output_json=av_file))
+            # asyncio.run() cannot be called from a running event loop (e.g. uvicorn).
+            # Running in a thread pool gives it an isolated loop to execute in.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(
+                    asyncio.run,
+                    fetch_and_save_allowed_values(fields_json=path, output_json=av_file)
+                ).result()
 
         self.seed_jira_field_embeddings_db(jira_fields_file)
         return self.documentProc._model
