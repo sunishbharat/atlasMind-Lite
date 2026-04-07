@@ -201,6 +201,7 @@ cython_debug/
 !README.md
 !data/jira_jql_annotated_queries.md
 !src/system_prompt.md
+!config/system_prompt.md
 
 # Atlassian credentials
 # profiles.json is tracked — tokens/secrets must remain empty
