@@ -203,4 +203,4 @@ cython_debug/
 !src/system_prompt.md
 
 # Atlassian credentials
-profiles.json
+# profiles.json is tracked — tokens/secrets must remain empty

@@ -1,0 +1,20 @@
+{
+  "default": "work",
+  "profiles": {
+    "personal": {
+      "jira_url": "[JIRA CLOUD]",
+      "email": "[EMAIL_ADDRESS]",
+      "token": "",
+      "client_id": "",
+      "client_secret": "cloud"
+    },
+    "work": {
+      "jira_url": "https://issues.apache.org/jira",
+      "email": "",
+      "token": "",
+      "client_id": "",
+      "client_secret": "",
+      "jira_type": "server"
+    }
+  }
+}
