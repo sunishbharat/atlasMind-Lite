@@ -12,7 +12,7 @@ _ROOT = Path(__file__).parent
 
 # -- Ollama / LLM -----------------------------------------------------
 OLLAMA_URL         = os.getenv("JQL_OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5-coder:7b-instruct")
+OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5:3b-instruct-q4_K_M")
 OLLAMA_TEMPERATURE    = float(os.getenv("JQL_OLLAMA_TEMPERATURE",  "0.1"))
 OLLAMA_TIMEOUT        = int(os.getenv("JQL_OLLAMA_TIMEOUT",        "120"))
 OLLAMA_NUM_CTX        = int(os.getenv("JQL_OLLAMA_NUM_CTX",        "2048"))
