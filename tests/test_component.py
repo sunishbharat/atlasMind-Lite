@@ -1,10 +1,10 @@
 import asyncio
-from jql_embeddings import JQL_Embeddings
-from jira_field_embeddings import Jira_Field_Embeddings
+from core.rag.jql_embeddings import JQL_Embeddings
+from core.rag.jira_field_embeddings import Jira_Field_Embeddings
 from pathlib import Path
 from dconfig import EmbeddingsConfig
 from settings import EMBEDDING_MODEL
-from atlasmind import AtlasMind
+from core.atlasmind import AtlasMind
 
 
 embedconfig = EmbeddingsConfig(model_name="BAAI/bge-small-en-v1.5")
