@@ -1,5 +1,9 @@
 import requests
-from settings import OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT
+from settings import (
+    OLLAMA_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT,
+    OLLAMA_TEMPERATURE, OLLAMA_NUM_CTX, OLLAMA_NUM_PREDICT,
+    OLLAMA_NUM_THREAD, OLLAMA_NUM_BATCH, OLLAMA_TOP_P, OLLAMA_TOP_K, OLLAMA_REPEAT_PENALTY,
+)
 from requests.exceptions import ConnectionError, Timeout
 import logging
 import httpx
@@ -14,6 +18,16 @@ class OllamaClient:
         self.url = f"{OLLAMA_URL}/api/generate"
         self.model = model
         self.timeout = OLLAMA_TIMEOUT
+        self.options = {
+            "num_ctx":        OLLAMA_NUM_CTX,
+            "num_predict":    OLLAMA_NUM_PREDICT,
+            "num_thread":     OLLAMA_NUM_THREAD,
+            "num_batch":      OLLAMA_NUM_BATCH,
+            "temperature":    OLLAMA_TEMPERATURE,
+            "top_p":          OLLAMA_TOP_P,
+            "top_k":          OLLAMA_TOP_K,
+            "repeat_penalty": OLLAMA_REPEAT_PENALTY,
+        }
         logger.info(f"Ollama client initialized with model: {self.model}")
 
     def test_connection(self, prompt: str = "Hello") -> str:
@@ -41,7 +55,7 @@ class OllamaClient:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     self.url,
-                    json={"model": self.model, "prompt": prompt, "stream": False},
+                    json={"model": self.model, "prompt": prompt, "stream": False, "options": self.options},
                 )
                 response.raise_for_status()
         except httpx.ReadTimeout as e:
