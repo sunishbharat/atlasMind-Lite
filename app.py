@@ -24,6 +24,7 @@ the last run (hash-gated — no redundant re-encoding).
 import argparse
 import asyncio
 import json
+import time
 
 from pyfiglet import Figlet
 from rich.console import Console
@@ -32,7 +33,7 @@ from rich.rule import Rule
 
 from core.atlasmind import AtlasMind
 from dconfig import EmbeddingsConfig
-from settings import EMBEDDING_MODEL, OLLAMA_MODEL
+from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL
 
 console = Console()
 
@@ -63,20 +64,24 @@ _EXIT_COMMANDS = {"am quit", "am exit", "am q", "exit", "quit", "q"}
 _HELP_COMMANDS = {"am help", "am ?", "?"}
 
 
-def _print_banner() -> None:
+def _print_banner(llm_backend: str = "ollama") -> None:
     f = Figlet(font="slant")
+    llm_model = GROQ_MODEL if llm_backend == "groq" else OLLAMA_MODEL
     console.print(BORDER_UP)
     console.print(f.renderText("AtlasMind"))
     console.print(
         "Ask anything about your Jira project in plain English\n\n"
-        f"[dim]LLM model   :[/] [cyan]{OLLAMA_MODEL}[/]\n"
+        f"[dim]LLM backend :[/] [cyan]{llm_backend}[/]\n"
+        f"[dim]LLM model   :[/] [cyan]{llm_model}[/]\n"
         f"[dim]Embed model :[/] [cyan]{EMBEDDING_MODEL}[/]\n"
     )
     console.print(BORDER_DWN)
 
 
-def _print_result(llm_result, jira_result: dict | None) -> None:
+def _print_result(llm_result, jira_result: dict | None, elapsed: float | None = None) -> None:
+    route = "JQL pipeline" if llm_result.jql else "General answer"
     console.print(Rule(style="dim cyan"))
+    console.print(f"[dim]Route   : {route}[/]")
     if llm_result.jql:
         console.print(f"\n[bold cyan]JQL[/]    : {llm_result.jql}")
         if llm_result.chart_spec:
@@ -86,20 +91,22 @@ def _print_result(llm_result, jira_result: dict | None) -> None:
             total = jira_result.get("total", 0)
             console.print(f"[bold cyan]Issues[/] : {shown} of {total} returned")
     console.print(f"[bold cyan]Answer[/] : {llm_result.answer}\n")
+    if elapsed is not None:
+        console.print(f"[dim]Response time : {elapsed:.2f}s[/]")
     console.print(Rule(style="dim cyan"))
 
 
-def build_atlasmind() -> AtlasMind:
+def build_atlasmind(llm_backend: str = "ollama") -> AtlasMind:
     """Initialise AtlasMind and seed both pgvector tables."""
     config = EmbeddingsConfig(model_name=EMBEDDING_MODEL)
-    atlasmind = AtlasMind(config)
+    atlasmind = AtlasMind(config, llm_backend=llm_backend)
     atlasmind.run()
     return atlasmind
 
 
-async def repl(atlasmind: AtlasMind) -> None:
+async def repl(atlasmind: AtlasMind, llm_backend: str = "ollama") -> None:
     """Interactive REPL — keeps prompting until the user exits."""
-    _print_banner()
+    _print_banner(llm_backend)
     history: list[str] = []
 
     while True:
@@ -132,8 +139,10 @@ async def repl(atlasmind: AtlasMind) -> None:
         console.print()
 
         try:
+            t0 = time.monotonic()
             llm_result, jira_result = await atlasmind.generate_jql(user_input)
-            _print_result(llm_result, jira_result)
+            elapsed = time.monotonic() - t0
+            _print_result(llm_result, jira_result, elapsed)
         except KeyboardInterrupt:
             console.print("\n[dim][interrupted][/]")
         except Exception as exc:
@@ -150,16 +159,36 @@ async def run_query(atlasmind: AtlasMind, query: str) -> None:
     print(f"Answer : {llm_result.answer}")
 
 
-def run_server() -> None:
-    """Start the FastAPI server on http://0.0.0.0:8000."""
+def run_server(host: str = "0.0.0.0", port: int = 8000, llm_backend: str = "ollama") -> None:
+    """Start the FastAPI server."""
+    import os
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
+    os.environ["LLM_BACKEND"] = llm_backend
+    uvicorn.run("server:app", host=host, port=port, reload=False)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="app",
-        description="aMind — natural language to JQL generator",
+        description="aMind — natural language to JQL generator using RAG + LLM",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python app.py --query                        # interactive REPL (local Ollama)\n"
+            "  python app.py --query 'list open bugs'       # single-shot query\n"
+            "  python app.py --query --model groq           # REPL using Groq cloud\n"
+            "  python app.py --server                       # start FastAPI server\n"
+            "  python app.py --server --model groq --port 9000\n"
+            "\n"
+            "Environment variables:\n"
+            "  LLM_BACKEND          ollama | groq  (overrides --model when set)\n"
+            "  GROQ_API_KEY         Groq API key for local dev\n"
+            "  GROQ_API_KEY_OCID    OCI Vault secret OCID (takes priority over GROQ_API_KEY)\n"
+            "  GROQ_MODEL           Groq model name          (default: llama-3.3-70b-versatile)\n"
+            "  JQL_LOCAL_MODEL      Ollama model name        (default: qwen2.5:3b-instruct-q4_K_M)\n"
+            "  JQL_OLLAMA_URL       Ollama base URL          (default: http://localhost:11434)\n"
+            "  DATABASE_URL         PostgreSQL + pgvector connection string\n"
+        ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
@@ -172,19 +201,37 @@ def main() -> None:
     mode.add_argument(
         "--server",
         action="store_true",
-        help="Start the FastAPI server on http://0.0.0.0:8000",
+        help="Start the FastAPI server (GET+POST /query, GET /health)",
+    )
+    parser.add_argument(
+        "--model",
+        choices=["ollama", "groq"],
+        default="ollama",
+        metavar="BACKEND",
+        help="LLM backend: 'ollama' (local, default) or 'groq' (cloud)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind to in server mode (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to listen on in server mode (default: 8000)",
     )
     args = parser.parse_args()
 
     if args.server:
-        run_server()
+        run_server(host=args.host, port=args.port, llm_backend=args.model)
     else:
-        atlasmind = build_atlasmind()
+        atlasmind = build_atlasmind(llm_backend=args.model)
         if args.query:
             asyncio.run(run_query(atlasmind, args.query))
         else:
             try:
-                asyncio.run(repl(atlasmind))
+                asyncio.run(repl(atlasmind, llm_backend=args.model))
             except KeyboardInterrupt:
                 console.print("\n\n[dim]Goodbye.[/]")
 

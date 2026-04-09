@@ -10,10 +10,12 @@ from document_processor import DocumentProcessor
 from rag.jira_field_embeddings import Jira_Field_Embeddings
 from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
+from core.groq_client import GroqClient
+from core.router import QueryRouter
 from dconfig import EmbeddingsConfig
 from config.jira_config import load_active_profile, get_data_dir
 from jira.jira_compute import enrich_issue
-from settings import DEFAULT_ANNOTATION_FILE, JIRA_FIELDS_FILENAME, SYSTEM_PROMPT_FILE, MAX_RESULTS
+from settings import DEFAULT_ANNOTATION_FILE, JIRA_FIELDS_FILENAME, SYSTEM_PROMPT_FILE, ROUTER_PROMPT_FILE, MAX_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +35,9 @@ def _parse_limit(query: str) -> int:
 
 
 class JqlResponse(BaseModel):
-    jql: str | None
-    chart_spec: dict[str, Any] | None
-    answer: str
+    jql: str | None = None
+    chart_spec: dict[str, Any] | None = None
+    answer: str | None = None
 
 
 def normalize_issue(jira_issue: dict) -> dict:
@@ -78,9 +80,14 @@ def normalize_issue(jira_issue: dict) -> dict:
 
 
 class AtlasMind:
-    def __init__(self, embedconfig: EmbeddingsConfig):
+    def __init__(self, embedconfig: EmbeddingsConfig, llm_backend: str = "ollama"):
         self.embedconfig = embedconfig
-        self.ollama_client = OllamaClient()
+        self.llm_backend = llm_backend
+        if llm_backend == "groq":
+            self.llm_client = GroqClient()
+        else:
+            self.llm_client = OllamaClient()
+        self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
         self.system_prompt_dir = Path(SYSTEM_PROMPT_FILE)
 
@@ -90,7 +97,7 @@ class AtlasMind:
         self.jira_field_embeddings = Jira_Field_Embeddings(embedconfig, self.document_processor)
 
     def run(self):
-        self.ollama_client.test_connection()
+        self.llm_client.test_connection()
         self.jql_embeddings.run(Path(DEFAULT_ANNOTATION_FILE))
 
         profile = load_active_profile()
@@ -231,14 +238,20 @@ class AtlasMind:
         Raises:
             ValueError: If Ollama returns a response that cannot be parsed as JSON.
         """
+        # Stage 1: fast route — one small LLM call, no embeddings.
+        route = await self.router.route(query)
+        if not route.is_jql:
+            return JqlResponse(jql=None, chart_spec=None, answer=route.answer), None
+
+        # Stage 2: full RAG + JQL pipeline.
         prompt = await self._build_prompt(query)
-        raw = await self.ollama_client.generate_jql(prompt)
-        logger.debug("Ollama raw response: %s", raw)
+        raw = await self.llm_client.generate_jql(prompt)
+        logger.debug("LLM raw response: %s", raw)
 
         try:
             data = json.loads(raw, strict=False)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Ollama response is not valid JSON: {raw!r}") from exc
+            raise ValueError(f"LLM response is not valid JSON: {raw!r}") from exc
 
         llm_result = JqlResponse(**data)
 
