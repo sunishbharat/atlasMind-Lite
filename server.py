@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
@@ -16,14 +17,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _atlasmind: AtlasMind | None = None
+_llm_backend: str = os.getenv("LLM_BACKEND", "ollama")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _atlasmind
-    logger.info("Starting up — seeding pgvector databases...")
+    logger.info("Starting up — seeding pgvector databases... (backend: %s)", _llm_backend)
     config = EmbeddingsConfig(model_name=EMBEDDING_MODEL)
-    _atlasmind = AtlasMind(config)
+    _atlasmind = AtlasMind(config, llm_backend=_llm_backend)
     _atlasmind.run()
     logger.info("Ready.")
     yield
@@ -176,5 +178,8 @@ async def query_post(request: QueryRequest):
 
 
 if __name__ == "__main__":
+    # Use app.py as the primary entry point.
+    # This block supports direct uvicorn invocation where LLM_BACKEND
+    # env var controls the backend.
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

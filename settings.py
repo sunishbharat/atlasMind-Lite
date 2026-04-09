@@ -10,18 +10,32 @@ from pathlib import Path
 
 _ROOT = Path(__file__).parent
 
+# -- LLM backend selection --------------------------------------------
+# "ollama" (default) or "groq"
+LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama")
+
 # -- Ollama / LLM -----------------------------------------------------
 OLLAMA_URL         = os.getenv("JQL_OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5:3b-instruct-q4_K_M")
 OLLAMA_TEMPERATURE    = float(os.getenv("JQL_OLLAMA_TEMPERATURE",  "0.1"))
 OLLAMA_TIMEOUT        = int(os.getenv("JQL_OLLAMA_TIMEOUT",        "120"))
 OLLAMA_NUM_CTX        = int(os.getenv("JQL_OLLAMA_NUM_CTX",        "2048"))
-OLLAMA_NUM_PREDICT    = int(os.getenv("JQL_OLLAMA_NUM_PREDICT",    "150"))
+OLLAMA_NUM_PREDICT    = int(os.getenv("JQL_OLLAMA_NUM_PREDICT",    "512"))
 OLLAMA_NUM_THREAD     = int(os.getenv("JQL_OLLAMA_NUM_THREAD",     "4"))
 OLLAMA_NUM_BATCH      = int(os.getenv("JQL_OLLAMA_NUM_BATCH",      "256"))
 OLLAMA_TOP_P          = float(os.getenv("JQL_OLLAMA_TOP_P",        "0.5"))
 OLLAMA_TOP_K          = int(os.getenv("JQL_OLLAMA_TOP_K",          "20"))
 OLLAMA_REPEAT_PENALTY = float(os.getenv("JQL_OLLAMA_REPEAT_PENALTY", "1.1"))
+
+# -- Groq cloud LLM ---------------------------------------------------
+# GROQ_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
+# GROQ_API_KEY: used as plaintext fallback for local development.
+from cloud.oci_vault import resolve_secret
+GROQ_API_KEY    = resolve_secret("GROQ_API_KEY_OCID", "GROQ_API_KEY")
+GROQ_MODEL      = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.1"))
+GROQ_TIMEOUT    = int(os.getenv("GROQ_TIMEOUT", "30"))
+GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "500"))
 
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")
@@ -58,6 +72,7 @@ DATA_DIR = _ROOT / "data"
 JIRA_FIELDS_FILENAME         = "jira_fields.json"
 JIRA_ALLOWED_VALUES_FILENAME = "jira_allowed_values.json"
 SYSTEM_PROMPT_FILE           = str(_ROOT / "config" / "system_prompt.md")
+ROUTER_PROMPT_FILE           = str(_ROOT / "config" / "router_prompt.md")
 
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
