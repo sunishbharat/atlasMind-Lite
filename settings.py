@@ -60,9 +60,9 @@ JIRA_FIELD_SEARCH_LIMIT      = 3
 JIRA_FIELD_IGNORE_IDS: set[str] = {}
 
 # -- JQL annotation file -----------------------------------------------
-DEFAULT_ANNOTATION_FILE = os.getenv(
-    "JQL_ANNOTATION_FILE",
-    str(_ROOT / "data" / "jira_jql_annotated_queries.md"),
+DEFAULT_ANNOTATION_FILE = (
+    os.getenv("JQL_ANNOTATION_FILE")
+    or str(_ROOT / "data" / "jira_jql_annotated_queries.md")
 )
 
 # -- Data directory (domain-scoped subdirs are created inside here) ----
