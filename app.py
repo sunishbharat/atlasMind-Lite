@@ -32,6 +32,7 @@ from rich.markdown import Markdown
 from rich.rule import Rule
 
 from core.atlasmind import AtlasMind
+from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL
 
@@ -78,7 +79,26 @@ def _print_banner(llm_backend: str = "ollama") -> None:
     console.print(BORDER_DWN)
 
 
-def _print_result(llm_result, jira_result: dict | None, elapsed: float | None = None) -> None:
+def _compute_display_fields(
+    atlasmind: AtlasMind,
+    jira_result: dict | None,
+) -> tuple[list[str], list[str]] | None:
+    """Return (standard_names, intent_names) for a JQL result, or None for general answers."""
+    if not jira_result or not atlasmind.field_resolver:
+        return None
+    resolved: ResolvedIntentFields = jira_result.get(
+        "resolved_intent_fields", ResolvedIntentFields()
+    )
+    std_names = atlasmind.field_resolver.display_names_for_ids(atlasmind.standard_field_ids)
+    return std_names, resolved.display_names
+
+
+def _print_result(
+    llm_result,
+    jira_result: dict | None,
+    elapsed: float | None = None,
+    display_fields: tuple[list[str], list[str]] | None = None,
+) -> None:
     route = "JQL pipeline" if llm_result.jql else "General answer"
     console.print(Rule(style="dim cyan"))
     console.print(f"[dim]Route   : {route}[/]")
@@ -90,6 +110,21 @@ def _print_result(llm_result, jira_result: dict | None, elapsed: float | None = 
             shown = jira_result.get("shown", 0)
             total = jira_result.get("total", 0)
             console.print(f"[bold cyan]Issues[/] : {shown} of {total} returned")
+        if display_fields:
+            std_names, intent_names = display_fields
+            std_str = "  ·  ".join(std_names)
+            if intent_names:
+                int_str = "  ·  ".join(intent_names)
+                console.print(
+                    f"[bold cyan]Fields[/] : {std_str}"
+                    f"  [dim cyan]+[/]  [italic cyan]{int_str}[/]"
+                )
+            else:
+                console.print(f"[bold cyan]Fields[/] : {std_str}")
+        if llm_result.intent_fields:
+            console.print(
+                f"[dim]LLM proposed intent : {', '.join(llm_result.intent_fields)}[/]"
+            )
     console.print(f"[bold cyan]Answer[/] : {llm_result.answer}\n")
     if elapsed is not None:
         console.print(f"[dim]Response time : {elapsed:.2f}s[/]")
@@ -142,7 +177,8 @@ async def repl(atlasmind: AtlasMind, llm_backend: str = "ollama") -> None:
             t0 = time.monotonic()
             llm_result, jira_result = await atlasmind.generate_jql(user_input)
             elapsed = time.monotonic() - t0
-            _print_result(llm_result, jira_result, elapsed)
+            display_fields = _compute_display_fields(atlasmind, jira_result)
+            _print_result(llm_result, jira_result, elapsed, display_fields)
         except KeyboardInterrupt:
             console.print("\n[dim][interrupted][/]")
         except Exception as exc:
@@ -156,6 +192,11 @@ async def run_query(atlasmind: AtlasMind, query: str) -> None:
     llm_result, jira_result = await atlasmind.generate_jql(query)
     if llm_result.jql:
         print(f"JQL    : {llm_result.jql}")
+        fields = _compute_display_fields(atlasmind, jira_result)
+        if fields:
+            std_names, intent_names = fields
+            all_names = std_names + ([f"+{n}" for n in intent_names] if intent_names else [])
+            print(f"Fields : {', '.join(all_names)}")
     print(f"Answer : {llm_result.answer}")
 
 

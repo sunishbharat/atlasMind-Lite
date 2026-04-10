@@ -3,15 +3,30 @@ models.py — Pydantic request/response models for the aMind API.
 """
 
 from typing import Any, Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+class JqlResponse(BaseModel):
+    """Structured output from the LLM for a JQL query."""
+    jql:           str | None            = None
+    chart_spec:    dict[str, Any] | None = None
+    answer:        str | None            = None
+    intent_fields: list[str] | None      = None
 
 
 class ChartSpec(BaseModel):
     type: Literal["bar", "pie", "line", "scatter"]
     x_field: str
     y_field: str
-    title: str
+    title: str = ""
     color_field: Optional[str] = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def _normalise_type(cls, v: str) -> str:
+        """Normalise LLM chart type aliases before validation."""
+        _ALIASES = {"multi-line": "line", "multiline": "line", "area": "line"}
+        return _ALIASES.get(str(v).lower(), v)
 
 
 class QueryRequest(BaseModel):

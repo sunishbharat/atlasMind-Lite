@@ -1353,3 +1353,15 @@ issue = ZOOKEEPER-100
 
 /* 431. Look up a single Jira issue by key to view its fields */
 issue = HIVE-5000
+
+/* 432. List all the issues in the sprints */
+Sprint is not EMPTY
+
+/* 433. List all the issues in sprint Usergrid 36 */
+Sprint = "Usergrid 36"
+
+/* 434. List all the issues in sprint id 224 */
+Sprint = 224
+
+/* 435. List all the issues in sprint id 224,225,226 */
+Sprint in (224,225,226)

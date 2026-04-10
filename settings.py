@@ -53,7 +53,7 @@ JQL_SEARCH_LIMIT     = 5
 JIRA_FIELD_TABLE             = "jira_field_annotations"
 JIRA_FIELD_COL_DESCRIPTION   = "description"
 JIRA_FIELD_COL_EMBEDDING     = "embedding"
-JIRA_FIELD_SEARCH_LIMIT      = 3
+JIRA_FIELD_SEARCH_LIMIT      = 5
 
 # Field IDs to exclude from embedding regardless of type.
 # Add custom fields that are internal, deprecated, or irrelevant to JQL queries.
@@ -77,6 +77,17 @@ ROUTER_PROMPT_FILE           = str(_ROOT / "config" / "router_prompt.md")
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
 MAX_RESULTS  = 10
+
+# -- Intent field resolution -------------------------------------------
+# Maximum number of extra fields the LLM may propose per query.
+MAX_INTENT_FIELDS = int(os.getenv("MAX_INTENT_FIELDS", "5"))
+
+# Desired standard column IDs — always shown in the frontend.
+# Validated against jira_fields.json at startup; missing IDs are logged and dropped.
+STANDARD_FIELD_IDS: list[str] = [
+    "key", "summary", "assignee", "created", "resolutiondate",
+]
+
 
 # -- Atlassian Rovo MCP ------------------------------------------------
 ROVO_MCP_URL = "https://mcp.atlassian.com/v1/mcp"
