@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 
 from core.atlasmind import AtlasMind, normalize_issue
+from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse
 from config.jira_config import load_active_profile
@@ -37,43 +38,25 @@ app = FastAPI(title="aMind JQL Generator", lifespan=lifespan)
 
 # -- Helpers ----------------------------------------------------------
 
-_DEFAULT_DISPLAY_FIELDS = ["status", "assignee", "created"]
+def _build_display_fields(resolved: ResolvedIntentFields) -> list[str]:
+    """Build the ordered display field list for the frontend.
 
-_FIELD_HINTS: list[tuple[list[str], str]] = [
-    (["assignee", "assigned to"],   "assignee"),
-    (["reporter", "reported by"],   "reporter"),
-    (["status"],                    "status"),
-    (["priority"],                  "priority"),
-    (["type", "issuetype"],         "issuetype"),
-    (["sprint"],                    "sprint"),
-    (["label"],                     "labels"),
-    (["epic"],                      "epic_link"),
-    (["point", "story point"],      "story_points"),
-    (["created"],                   "created"),
-    (["updated", "modified"],       "updated"),
-    (["due"],                       "duedate"),
-    (["resolved", "resolution"],    "resolutiondate"),
-    (["parent"],                    "parent"),
-    (["comment"],                   "comments"),
-    (["description", "detail"],     "description"),
-    (["effort", "days", "day", "completion time", "time to close",
-       "took", "longest", "duration", "cycle time"], "effort_days"),
-    (["effort hour", "hours", "hour"], "effort_hours"),
-    (["age", "open for", "how long open"], "age_days"),
-]
+    Standard fields are always first, resolved to their canonical display names
+    via FieldResolver. Intent fields proposed by the LLM are appended after.
 
+    Args:
+        resolved: Intent fields resolved from the LLM response.
 
-def _detect_display_fields(query: str) -> list[str]:
-    q = query.lower()
-    fields: list[str] = []
-    for keywords, field in _FIELD_HINTS:
-        if any(kw in q for kw in keywords):
-            if field not in fields:
-                fields.append(field)
-    for f in _DEFAULT_DISPLAY_FIELDS:
-        if f not in fields:
-            fields.append(f)
-    return fields
+    Returns:
+        List of display name strings for the frontend to use as column headers.
+    """
+    if _atlasmind and _atlasmind.field_resolver:
+        standard_names = _atlasmind.field_resolver.display_names_for_ids(
+            _atlasmind.standard_field_ids
+        )
+    else:
+        standard_names = list(_atlasmind.standard_field_ids) if _atlasmind else []
+    return standard_names + resolved.display_names
 
 
 def _extract_filters(issues: list[dict]) -> dict[str, list[str]]:
@@ -92,7 +75,7 @@ def _extract_filters(issues: list[dict]) -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in facets.items() if v}
 
 
-def _build_response(llm_result, jira_result: dict | None, query: str = "") -> QueryResponse:
+def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
     """Build a uniform QueryResponse from LLM and optional Jira results."""
     profile = load_active_profile()
     profile_name = profile.get("name", "default")
@@ -114,7 +97,19 @@ def _build_response(llm_result, jira_result: dict | None, query: str = "") -> Qu
             chart_spec=chart_spec,
         )
 
-    normalised = [normalize_issue(r) for r in jira_result.get("raw_issues", [])]
+    resolved: ResolvedIntentFields = jira_result.get(
+        "resolved_intent_fields", ResolvedIntentFields()
+    )
+    extra_fields = resolved.as_extra_fields()
+    requested_ids: set[str] = (
+        set(_atlasmind.standard_field_ids) | set(resolved.field_ids)
+        if _atlasmind else set()
+    )
+    normalised = [
+        normalize_issue(r, extra_fields=extra_fields, requested_ids=requested_ids)
+        for r in jira_result.get("raw_issues", [])
+    ]
+
     return QueryResponse(
         type="jql",
         profile=profile_name,
@@ -124,7 +119,7 @@ def _build_response(llm_result, jira_result: dict | None, query: str = "") -> Qu
         total=jira_result.get("total", 0),
         shown=jira_result.get("shown", 0),
         examined=jira_result.get("shown", 0),
-        display_fields=_detect_display_fields(query),
+        display_fields=_build_display_fields(resolved),
         issues=normalised,
         chart_spec=chart_spec,
         filters=_extract_filters(normalised),
@@ -158,9 +153,12 @@ async def query_get(
         raise HTTPException(status_code=503, detail="Model not initialised.")
     try:
         llm_result, jira_result = await _atlasmind.generate_jql(q)
-        return _build_response(llm_result, jira_result, query=q).model_dump()
+        return _build_response(llm_result, jira_result).model_dump()
+    except ValueError as exc:
+        logger.error("Query failed: %s", exc)
+        return _error_response(str(exc))
     except Exception as exc:
-        logger.exception("Query failed: %s", exc)
+        logger.exception("Query failed (unexpected): %s", exc)
         return _error_response(str(exc))
 
 
@@ -171,15 +169,15 @@ async def query_post(request: QueryRequest):
         raise HTTPException(status_code=503, detail="Model not initialised.")
     try:
         llm_result, jira_result = await _atlasmind.generate_jql(request.query)
-        return _build_response(llm_result, jira_result, query=request.query).model_dump()
+        return _build_response(llm_result, jira_result).model_dump()
+    except ValueError as exc:
+        logger.error("Query failed: %s", exc)
+        return _error_response(str(exc))
     except Exception as exc:
-        logger.exception("Query failed: %s", exc)
+        logger.exception("Query failed (unexpected): %s", exc)
         return _error_response(str(exc))
 
 
 if __name__ == "__main__":
-    # Use app.py as the primary entry point.
-    # This block supports direct uvicorn invocation where LLM_BACKEND
-    # env var controls the backend.
     import uvicorn
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

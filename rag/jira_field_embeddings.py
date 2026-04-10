@@ -171,6 +171,65 @@ class Jira_Field_Embeddings:
         return pgConfig
 
 
+    def fetch_field_mappings(self) -> tuple[dict[str, str], dict[str, str]]:
+        """Fetch field name/ID mappings from the vector DB.
+
+        Returns two dicts built from a single query:
+        - name_to_id: {field_name.strip().lower(): field_id}
+            Used by FieldResolver to translate LLM-proposed display names to IDs.
+            Duplicate names keep the first-seen field_id, matching the seeding behaviour.
+        - id_to_name: {field_id: canonical_field_name}
+            Used to look up display names for the frontend and for known_ids validation.
+
+        Returns:
+            (name_to_id, id_to_name)
+        """
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(f"SELECT field_id, field_name FROM {JIRA_FIELD_TABLE};")
+                rows = cur.fetchall()
+
+        name_to_id: dict[str, str] = {}
+        id_to_name: dict[str, str] = {}
+        for field_id, field_name in rows:
+            key = field_name.strip().lower()
+            if key not in name_to_id:
+                name_to_id[key] = field_id
+            id_to_name[field_id] = field_name
+
+        logger.info(
+            "fetch_field_mappings: %d field IDs, %d unique names loaded from vector DB",
+            len(id_to_name), len(name_to_id),
+        )
+        return name_to_id, id_to_name
+
+    def fetch_allowed_values(self) -> dict[str, list[str]]:
+        """Fetch per-field allowed values from the vector DB.
+
+        Returns:
+            {field_id: [allowed_value_strings]} for all fields that have
+            a non-null allowed_values column. Fields without discrete options
+            (e.g. free-text, date, number fields) are omitted.
+        """
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(
+                    f"SELECT field_id, allowed_values FROM {JIRA_FIELD_TABLE} "
+                    f"WHERE allowed_values IS NOT NULL;"
+                )
+                rows = cur.fetchall()
+
+        result: dict[str, list[str]] = {}
+        for field_id, values in rows:
+            if isinstance(values, list) and values:
+                result[field_id] = [str(v) for v in values]
+
+        logger.info(
+            "fetch_allowed_values: %d fields with discrete options loaded from vector DB",
+            len(result),
+        )
+        return result
+
     async def search_jira_fields(
         self,
         query: str,
@@ -206,11 +265,13 @@ class Jira_Field_Embeddings:
             lambda: model.encode(query, normalize_embeddings=True),
         )
 
-        # System fields (is_custom = false) are ranked before custom fields.
-        # Distance is the tiebreaker within each group so the closest system
-        # field always beats a custom field with the same semantic relevance.
-        # A custom field only appears when no sufficiently close system field
-        # fills the result set.
+        # Rank by semantic distance with a small penalty (0.1) for custom fields.
+        # This gently prefers system fields when relevance is comparable, but lets
+        # a clearly relevant custom field (e.g. "Story Points" in a story-points
+        # query) rank above a less relevant system field.
+        # Previously used ORDER BY is_custom ASC which hard-blocked all custom
+        # fields from the top-N results regardless of semantic relevance.
+        _CUSTOM_PENALTY = 0.1
         if project_key:
             sql = f"""
                 SELECT id, field_id, field_name, field_type, is_custom,
@@ -218,7 +279,8 @@ class Jira_Field_Embeddings:
                        {JIRA_FIELD_COL_EMBEDDING} <-> %s AS distance
                 FROM {JIRA_FIELD_TABLE}
                 WHERE project_key = %s
-                ORDER BY is_custom ASC, {JIRA_FIELD_COL_EMBEDDING} <-> %s
+                ORDER BY ({JIRA_FIELD_COL_EMBEDDING} <-> %s)
+                         + (CASE WHEN is_custom THEN {_CUSTOM_PENALTY} ELSE 0 END)
                 LIMIT {JIRA_FIELD_SEARCH_LIMIT};
             """
             params = (query_emb, project_key, query_emb)
@@ -228,7 +290,8 @@ class Jira_Field_Embeddings:
                        {JIRA_FIELD_COL_DESCRIPTION},
                        {JIRA_FIELD_COL_EMBEDDING} <-> %s AS distance
                 FROM {JIRA_FIELD_TABLE}
-                ORDER BY is_custom ASC, {JIRA_FIELD_COL_EMBEDDING} <-> %s
+                ORDER BY ({JIRA_FIELD_COL_EMBEDDING} <-> %s)
+                         + (CASE WHEN is_custom THEN {_CUSTOM_PENALTY} ELSE 0 END)
                 LIMIT {JIRA_FIELD_SEARCH_LIMIT};
             """
             params = (query_emb, query_emb)
