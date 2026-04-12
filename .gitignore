@@ -203,6 +203,8 @@ cython_debug/
 !src/system_prompt.md
 !config/system_prompt.md
 !config/router_prompt.md
+!config/router_prompt_ollama.md
+
 
 # Atlassian credentials
 # profiles.json is tracked — tokens/secrets must remain empty
