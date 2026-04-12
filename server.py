@@ -7,9 +7,9 @@ from fastapi import FastAPI, HTTPException, Query
 from core.atlasmind import AtlasMind, normalize_issue
 from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
-from core.models import ChartSpec, QueryRequest, QueryResponse
+from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
 from config.jira_config import load_active_profile
-from settings import EMBEDDING_MODEL
+from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,15 +19,19 @@ logger = logging.getLogger(__name__)
 
 _atlasmind: AtlasMind | None = None
 _llm_backend: str = os.getenv("LLM_BACKEND", "ollama")
+_server_meta: ServerMeta | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _atlasmind
+    global _atlasmind, _server_meta
     logger.info("Starting up — seeding pgvector databases... (backend: %s)", _llm_backend)
     config = EmbeddingsConfig(model_name=EMBEDDING_MODEL)
     _atlasmind = AtlasMind(config, llm_backend=_llm_backend)
     _atlasmind.run()
+    _server_meta = ServerMeta(
+        model_name=GROQ_MODEL if _llm_backend == "groq" else OLLAMA_MODEL,
+    )
     logger.info("Ready.")
     yield
     logger.info("Shutting down.")
@@ -95,6 +99,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
             jira_base_url=jira_base_url,
             answer=llm_result.answer,
             chart_spec=chart_spec,
+            meta=_server_meta,
         )
 
     resolved: ResolvedIntentFields = jira_result.get(
@@ -123,6 +128,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
         issues=normalised,
         chart_spec=chart_spec,
         filters=_extract_filters(normalised),
+        meta=_server_meta,
     )
 
 
@@ -142,6 +148,14 @@ def _error_response(message: str) -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/meta", response_model=ServerMeta)
+def meta():
+    """Return server metadata. Frontend should call this once on bootup."""
+    if _server_meta is None:
+        raise HTTPException(status_code=503, detail="Server not initialised.")
+    return _server_meta
 
 
 @app.get("/query")

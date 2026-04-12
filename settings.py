@@ -71,8 +71,9 @@ DATA_DIR = _ROOT / "data"
 # -- File names — change here to rename files project-wide ------------
 JIRA_FIELDS_FILENAME         = "jira_fields.json"
 JIRA_ALLOWED_VALUES_FILENAME = "jira_allowed_values.json"
-SYSTEM_PROMPT_FILE           = str(_ROOT / "config" / "system_prompt.md")
-ROUTER_PROMPT_FILE           = str(_ROOT / "config" / "router_prompt.md")
+SYSTEM_PROMPT_FILE              = str(_ROOT / "config" / "system_prompt.md")
+ROUTER_PROMPT_FILE              = str(_ROOT / "config" / "router_prompt.md")
+ROUTER_PROMPT_FILE_OLLAMA       = str(_ROOT / "config" / "router_prompt_ollama.md")
 
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
