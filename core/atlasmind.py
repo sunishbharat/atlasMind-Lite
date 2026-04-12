@@ -22,6 +22,7 @@ from settings import (
     MAX_INTENT_FIELDS,
     MAX_RESULTS,
     ROUTER_PROMPT_FILE,
+    ROUTER_PROMPT_FILE_OLLAMA,
     STANDARD_FIELD_IDS,
     SYSTEM_PROMPT_FILE,
 )
@@ -292,10 +293,10 @@ class AtlasMind:
 
         if llm_backend == "groq":
             self.llm_client = GroqClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
         else:
             self.llm_client = OllamaClient()
-
-        self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE_OLLAMA), two_pass=True)
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
         self.system_prompt_dir = Path(SYSTEM_PROMPT_FILE)
 
@@ -445,9 +446,10 @@ class AtlasMind:
         Raises:
             ValueError: If the LLM returns a response that cannot be parsed as JSON.
         """
-        logger.info("User query: %s", query)
+        logger.info("*** User query: %s", query)
         route = await self.router.route(query)
         if not route.is_jql:
+            logger.info("*** AI answer: %s", route.answer)
             return JqlResponse(jql=None, chart_spec=None, answer=route.answer), None
 
         prompt = await self._build_prompt(query)
@@ -460,7 +462,8 @@ class AtlasMind:
             raise ValueError(f"LLM response is not valid JSON: {raw!r}") from exc
 
         llm_result = JqlResponse(**data)
-        logger.info("LLM generated output: %s", llm_result)
+        logger.info("*** AI JQL: %s", llm_result.jql)
+        logger.info("*** AI answer: %s", llm_result.answer)
 
         jira_result = None
         if llm_result.jql:

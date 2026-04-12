@@ -29,6 +29,15 @@ class ChartSpec(BaseModel):
         return _ALIASES.get(str(v).lower(), v)
 
 
+class ServerMeta(BaseModel):
+    """Metadata about the server configuration sent to the frontend with every response.
+
+    Add new fields here to expose more server-side context to the UI.
+    All fields are optional so older clients are not broken when new fields are added.
+    """
+    model_name: Optional[str] = None
+
+
 class QueryRequest(BaseModel):
     query:   str
     profile: Optional[str] = None
@@ -49,6 +58,7 @@ class QueryResponse(BaseModel):
     issues:         list[dict]                 = []
     chart_spec:     Optional[ChartSpec]        = None
     filters:        Optional[dict[str, list[str]]] = None
+    meta:           Optional[ServerMeta]       = None
 
 
 class ApiResponse(BaseModel):

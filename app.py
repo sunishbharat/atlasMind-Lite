@@ -125,7 +125,10 @@ def _print_result(
             console.print(
                 f"[dim]LLM proposed intent : {', '.join(llm_result.intent_fields)}[/]"
             )
-    console.print(f"[bold cyan]Answer[/] : {llm_result.answer}\n")
+    answer = llm_result.answer or ""
+    if not llm_result.jql and len(answer) > 300:
+        answer = answer[:300].rsplit(" ", 1)[0] + " …"
+    console.print(f"[bold cyan]Answer[/] : {answer}\n")
     if elapsed is not None:
         console.print(f"[dim]Response time : {elapsed:.2f}s[/]")
     console.print(Rule(style="dim cyan"))
