@@ -15,7 +15,7 @@ class JqlResponse(BaseModel):
 
 
 class ChartSpec(BaseModel):
-    type: Literal["bar", "pie", "line", "scatter"]
+    type: Literal["bar", "stacked_bar", "pie", "line", "scatter"]
     x_field: str
     y_field: str
     title: str = ""
@@ -40,9 +40,10 @@ class ServerMeta(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    query:   str
-    profile: Optional[str] = None
-    limit:   Optional[int] = None
+    query:      str
+    profile:    Optional[str] = None
+    limit:      Optional[int] = None
+    request_id: Optional[str] = None  # client-generated UUID; used by POST /event to cancel
 
 
 class QueryResponse(BaseModel):

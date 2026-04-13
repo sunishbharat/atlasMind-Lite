@@ -47,7 +47,7 @@ JQL_TABLE            = "jql_annotations"
 JQL_COL_ANNOTATION   = "annotation"
 JQL_COL_JQL          = "jql"
 JQL_COL_EMBEDDING    = "embedding"
-JQL_SEARCH_LIMIT     = 5
+JQL_SEARCH_LIMIT     = 3
 
 # -- Jira field Embeddings DB schema ---------------------------------------------------------
 JIRA_FIELD_TABLE             = "jira_field_annotations"

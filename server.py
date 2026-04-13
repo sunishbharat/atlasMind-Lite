@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -8,6 +9,8 @@ from core.atlasmind import AtlasMind, normalize_issue
 from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
+from core.client_events import ClientEvent, ClientEventType, EventAck
+import core.client_events as client_events
 from config.jira_config import load_active_profile
 from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL
 
@@ -161,20 +164,37 @@ def meta():
 
 @app.get("/query")
 async def query_get(
-    q: str = Query(..., description="Natural language Jira query"),
+    q:          str = Query(...,  description="Natural language Jira query"),
+    request_id: str = Query(None, description="Client-generated UUID for cancel support"),
 ):
     """Translate a natural language query to JQL and return Jira issues (GET)."""
     if _atlasmind is None:
         raise HTTPException(status_code=503, detail="Model not initialised.")
+
+    logger.info("[cancel] GET /query request_id=%r", request_id)
+    token = client_events.register(request_id) if request_id else None
+    if not request_id:
+        logger.warning("[cancel] GET /query has no request_id — cancel will not work for this query")
+
+    task = asyncio.create_task(_atlasmind.generate_jql(q))
+    if token:
+        token.attach(task)
+
     try:
-        llm_result, jira_result = await _atlasmind.generate_jql(q)
+        llm_result, jira_result = await task
         return _build_response(llm_result, jira_result).model_dump()
+    except asyncio.CancelledError:
+        logger.info("Query cancelled by client: request_id=%s", request_id)
+        return _error_response("Query cancelled.")
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc))
     except Exception as exc:
         logger.exception("Query failed (unexpected): %s", exc)
         return _error_response(str(exc))
+    finally:
+        if request_id:
+            client_events.unregister(request_id)
 
 
 @app.post("/query")
@@ -182,15 +202,56 @@ async def query_post(request: QueryRequest):
     """Translate a natural language query to JQL and return Jira issues (POST)."""
     if _atlasmind is None:
         raise HTTPException(status_code=503, detail="Model not initialised.")
+
+    # Register the cancel token immediately — before any async work — so a
+    # cancel event arriving during LLM classification still finds the token.
+    logger.info("[cancel] POST /query request_id=%r", request.request_id)
+    token = client_events.register(request.request_id) if request.request_id else None
+    if not request.request_id:
+        logger.warning("[cancel] POST /query has no request_id — cancel will not work for this query")
+
+    task = asyncio.create_task(_atlasmind.generate_jql(request.query))
+    if token:
+        token.attach(task)
+
     try:
-        llm_result, jira_result = await _atlasmind.generate_jql(request.query)
+        llm_result, jira_result = await task
         return _build_response(llm_result, jira_result).model_dump()
+    except asyncio.CancelledError:
+        logger.info("Query cancelled by client: request_id=%s", request.request_id)
+        return _error_response("Query cancelled.")
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc))
     except Exception as exc:
         logger.exception("Query failed (unexpected): %s", exc)
         return _error_response(str(exc))
+    finally:
+        if request.request_id:
+            client_events.unregister(request.request_id)
+
+
+@app.post("/event", response_model=EventAck)
+async def post_event(event: ClientEvent):
+    """Receive a frontend event (e.g. cancel) for an in-flight query.
+
+    The frontend sends this with the same request_id used in POST /query.
+    Currently handled events:
+        cancel    — cancels the running query task
+        heartbeat — acknowledged, no server action
+    """
+    if event.event == ClientEventType.CANCEL:
+        found = client_events.cancel(event.request_id)
+        return EventAck(
+            request_id=event.request_id,
+            accepted=found,
+            detail="cancellation requested" if found else "no active query for this request_id",
+        )
+
+    if event.event == ClientEventType.HEARTBEAT:
+        return EventAck(request_id=event.request_id, accepted=True, detail="ok")
+
+    return EventAck(request_id=event.request_id, accepted=False, detail="unhandled event type")
 
 
 if __name__ == "__main__":
