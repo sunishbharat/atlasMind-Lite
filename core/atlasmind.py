@@ -328,12 +328,22 @@ class AtlasMind:
         # Load allowed values for JQL condition validation before API execution.
         self.allowed_values = self.jira_field_embeddings.fetch_allowed_values()
 
-    async def _build_prompt(self, query: str) -> str:
-        """Build a RAG-grounded prompt combining system instructions with retrieved context."""
+    async def _build_prompt(self, query: str) -> tuple[str, list[str]]:
+        """Build a RAG-grounded prompt combining system instructions with retrieved context.
+
+        Returns:
+            tuple of:
+                - prompt string to send to the LLM
+                - list of field IDs retrieved from the vector search (used to ensure
+                  all fields the LLM was shown are requested back from the Jira REST API)
+        """
         model = self.document_processor._model
 
         jql_examples, _ = self.jql_embeddings.search_sample_jql_embeddings_db(query, model)
         jira_fields, _ = await self.jira_field_embeddings.search_jira_fields(query, model)
+
+        # row = (id, field_id, field_name, field_type, is_custom, description, distance)
+        rag_field_ids: list[str] = [row[1] for row in jira_fields]
 
         system_prompt = self.system_prompt_dir.read_text(encoding="utf-8")
 
@@ -358,14 +368,14 @@ class AtlasMind:
             "   CORRECT: resolution IS NOT EMPTY ORDER BY resolutiondate DESC\n"
             "   (duration filtering is handled externally — omit it from JQL)\n"
             "5. Do NOT append LIMIT — result count is controlled externally.\n"
-            "6. Always end with ORDER BY unless the user specifies otherwise.\n\n"
+            "6. Always end with ORDER BY using a field ID from ## Available Jira Fields above — never use issueFunction or any field not listed there.\n\n"
             "## Similar JQL Examples\n"
             f"{examples_block}\n\n"
             "## User Request\n"
             f"{query}\n"
         )
 
-        return system_prompt + context
+        return system_prompt + context, rag_field_ids
 
     async def _execute_query(
         self,
@@ -454,7 +464,7 @@ class AtlasMind:
             logger.info("*** AI answer: %s", route.answer)
             return JqlResponse(jql=None, chart_spec=None, answer=route.answer), None
 
-        prompt = await self._build_prompt(query)
+        prompt, rag_field_ids = await self._build_prompt(query)
         raw = await self.llm_client.generate_jql(prompt)
         logger.debug("LLM raw response: %s", raw)
 
@@ -504,10 +514,18 @@ class AtlasMind:
                 else ResolvedIntentFields()
             )
 
+            # Include both intent fields (LLM-proposed display columns) and the
+            # field IDs surfaced by the vector search — these are the fields the
+            # LLM had available when writing the JQL, so they must be fetched back
+            # from Jira even if the LLM didn't explicitly list them in intent_fields.
+            combined_extra: list[str] = list(
+                dict.fromkeys((resolved.field_ids or []) + rag_field_ids)
+            )
+
             jira_result = await self._execute_query(
                 jql=clean_jql,
                 max_results=_parse_limit(query),
-                extra_field_ids=resolved.field_ids or None,
+                extra_field_ids=combined_extra or None,
             )
             jira_result["resolved_intent_fields"] = resolved
 

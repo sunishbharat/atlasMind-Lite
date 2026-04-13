@@ -237,3 +237,7 @@ class FieldResolver:
         Falls back to the raw field_id string when the ID is not in the map.
         """
         return [self._id_to_name.get(fid, fid) for fid in field_ids]
+
+    def filter_to_known_ids(self, candidates: list[str]) -> list[str]:
+        """Return only candidates that are valid field IDs in the resolver's map."""
+        return [fid for fid in candidates if fid in self._id_to_name]
