@@ -20,6 +20,7 @@ from settings import (
     DEFAULT_ANNOTATION_FILE,
     JIRA_FIELDS_FILENAME,
     MAX_INTENT_FIELDS,
+    MAX_JIRA_RESULTS,
     MAX_RESULTS,
     ROUTER_PROMPT_FILE,
     ROUTER_PROMPT_FILE_OLLAMA,
@@ -56,8 +57,6 @@ _JQL_FIELD_ARITH_COND_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-_MAX_ALLOWED = 500
-
 # Matches AND field = 'value' or AND field != 'value' with quoted values.
 _JQL_AND_EQUALITY_RE = re.compile(
     r"""\s+AND\s+([\w\[\]]+)\s*(!=|=)\s*['"]([^'"]+)['"]""",
@@ -142,11 +141,14 @@ def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
 
 
 def _parse_limit(query: str) -> int:
-    """Extract a numeric result limit from the user query, capped at _MAX_ALLOWED."""
+    """Extract a numeric result limit from the user query.
+
+    If MAX_JIRA_RESULTS is set (non-zero), the parsed value is capped at that limit.
+    """
     match = _LIMIT_RE.search(query)
     if match:
-        n = next(g for g in match.groups() if g is not None)
-        return min(int(n), _MAX_ALLOWED)
+        n = int(next(g for g in match.groups() if g is not None))
+        return min(n, MAX_JIRA_RESULTS) if MAX_JIRA_RESULTS else n
     return MAX_RESULTS
 
 

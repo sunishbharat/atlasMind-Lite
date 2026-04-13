@@ -78,6 +78,7 @@ ROUTER_PROMPT_FILE_OLLAMA       = str(_ROOT / "config" / "router_prompt_ollama.m
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
 MAX_RESULTS  = 10
+MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "500"))
 
 # -- Intent field resolution -------------------------------------------
 # Maximum number of extra fields the LLM may propose per query.
