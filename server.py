@@ -2,7 +2,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 
 from core.atlasmind import AtlasMind, normalize_issue
 from core.field_resolver import ResolvedIntentFields
@@ -39,13 +39,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="aMind JQL Generator", lifespan=lifespan)
-
-
-@app.middleware("http")
-async def log_client_ip(request: Request, call_next):
-    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
-    logger.info("Request from %s — %s %s", client_ip, request.method, request.url.path)
-    return await call_next(request)
 
 
 # -- Helpers ----------------------------------------------------------
