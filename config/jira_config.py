@@ -36,6 +36,26 @@ def get_data_dir(jira_url: str) -> Path:
     return DATA_DIR / slug
 
 
+def build_jira_auth(profile: dict) -> tuple:
+    """Return (httpx_auth, extra_headers) for a Jira profile.
+
+    Jira Cloud uses Basic auth (email:api_token).
+    Jira Server uses Bearer auth (PAT) — Basic auth is not accepted for PATs.
+
+    Returns:
+        (auth_tuple_or_None, headers_dict)
+    """
+    jira_type = profile.get("jira_type", "cloud")
+    email = profile.get("email", "")
+    token = profile.get("token", "")
+
+    if jira_type == "server" and token:
+        return None, {"Authorization": f"Bearer {token}"}
+    if email and token:
+        return (email, token), {}
+    return None, {}
+
+
 def load_active_profile() -> dict:
     """Load the active Jira profile from config/profiles.json.
 

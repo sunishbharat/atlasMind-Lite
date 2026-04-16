@@ -14,7 +14,7 @@ from core.router import QueryRouter
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
 from core.models import JqlResponse
 from dconfig import EmbeddingsConfig
-from config.jira_config import load_active_profile, get_data_dir
+from config.jira_config import load_active_profile, get_data_dir, build_jira_auth
 from jira.jira_compute import enrich_issue
 from settings import (
     DEFAULT_ANNOTATION_FILE,
@@ -395,9 +395,7 @@ class AtlasMind:
         """
         profile = load_active_profile()
         base_url = profile["jira_url"].rstrip("/")
-        email = profile.get("email", "")
-        token = profile.get("token", "")
-        auth = (email, token) if email and token else None
+        auth, auth_headers = build_jira_auth(profile)
 
         all_fields = self.field_resolver.build_fields_param(
             self.standard_field_ids, extra_field_ids
@@ -415,7 +413,7 @@ class AtlasMind:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(
                     url, params=params, auth=auth,
-                    headers={"Accept": "application/json"},
+                    headers={"Accept": "application/json", **auth_headers},
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
