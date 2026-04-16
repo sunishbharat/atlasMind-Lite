@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 import httpx
 import requests
-from config.jira_config import _SYSTEM_FIELD_ENDPOINTS, load_active_profile, get_data_dir
+from config.jira_config import _SYSTEM_FIELD_ENDPOINTS, load_active_profile, get_data_dir, build_jira_auth
 from settings import JIRA_FIELDS_FILENAME, JIRA_ALLOWED_VALUES_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,7 @@ def fetch_and_save_fields(output_path: Path = None) -> Path:
     """
     profile = load_active_profile()
     base_url = profile["jira_url"].rstrip("/")
-    email = profile.get("email", "")
-    token = profile.get("token", "")
-    auth = (email, token) if email and token else None
+    auth, auth_headers = build_jira_auth(profile)
 
     if output_path is None:
         output_path = get_data_dir(profile["jira_url"]) / JIRA_FIELDS_FILENAME
@@ -59,7 +57,7 @@ def fetch_and_save_fields(output_path: Path = None) -> Path:
     url = f"{base_url}/rest/api/2/field"
     logger.info("Fetching Jira fields from %s", url)
 
-    response = requests.get(url, auth=auth, headers={"Accept": "application/json"}, timeout=30)
+    response = requests.get(url, auth=auth, headers={"Accept": "application/json", **auth_headers}, timeout=30)
     response.raise_for_status()
 
     fields_list: list[dict] = response.json()
@@ -76,6 +74,7 @@ async def fetch_field_allowed_values(
     field_id: str,
     field_type: str,
     auth: tuple[str, str],
+    extra_headers: dict | None = None,
 ) -> list[str]:
     """Retrieve the allowed values for a Jira field via the REST API.
 
@@ -89,7 +88,9 @@ async def fetch_field_allowed_values(
         base_url: Jira instance base URL, e.g. "https://your-org.atlassian.net".
         field_id: The field ID, e.g. "status" or "customfield_10023".
         field_type: The schema type from the fields JSON, e.g. "option", "status".
-        auth: (username_or_email, api_token_or_password) for Basic auth.
+        auth: (username_or_email, api_token_or_password) for Basic auth. Pass None
+            when using Bearer auth via extra_headers instead.
+        extra_headers: Additional headers to merge (e.g. {"Authorization": "Bearer ..."}).
 
     Returns:
         list[str]: Sorted list of allowed value names. Empty list when the field
@@ -106,9 +107,9 @@ async def fetch_field_allowed_values(
     url = f"{base_url.rstrip('/')}{endpoint}"
     logger.debug("Fetching allowed values for field_id=%s from %s", field_id, url)
 
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", **(extra_headers or {})}
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(url, auth=auth if any(auth) else None, headers=headers)
+        response = await client.get(url, auth=auth if auth and any(auth) else None, headers=headers)
 
     if response.status_code == 401:
         logger.warning("field_id=%s  skipped — endpoint requires authentication (401)", field_id)
@@ -156,7 +157,7 @@ async def fetch_and_save_allowed_values(
         fields_json: Path to the Jira fields JSON from /rest/api/2/field.
         output_json: Destination path for the allowed values JSON.
         base_url: Jira instance base URL.
-        auth: (username, api_token). Leave empty for public Jira instances.
+        auth: (username, api_token). Leave empty to derive from the active profile.
     """
     profile = load_active_profile()
     data_dir = get_data_dir(profile["jira_url"])
@@ -168,12 +169,12 @@ async def fetch_and_save_allowed_values(
     if base_url is None:
         base_url = profile["jira_url"]
     if auth is None:
-        email = profile.get("email", "")
-        token = profile.get("token", "")
-        auth = (email, token)
+        auth, auth_headers = build_jira_auth(profile)
+    else:
+        auth_headers = {}
 
     raw: dict = json.loads(fields_json.read_text(encoding="utf-8"))
-    has_auth = any(auth)
+    has_auth = bool(auth) or bool(auth_headers)
 
     # Custom field option endpoints (/field/{id}/option) require authentication
     # on most Jira instances. Skip them when no credentials are provided to avoid
@@ -199,6 +200,7 @@ async def fetch_and_save_allowed_values(
             field_id=field_id,
             field_type=field_type,
             auth=auth,
+            extra_headers=auth_headers,
         )
         return field_id, values
 
