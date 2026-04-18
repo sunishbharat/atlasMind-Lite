@@ -6,6 +6,22 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, field_validator
 
 
+class RouteResult(BaseModel):
+    """Result of query routing — determines which pipeline handles the request."""
+    type: Literal["jql", "general", "raw"]
+    answer: str = ""
+    raw_jql: str = ""     # type="raw": literal JQL text left of /raw
+    chart_hint: str = ""  # type="raw": chart instruction right of /raw
+
+    @property
+    def is_jql(self) -> bool:
+        return self.type == "jql"
+
+    @property
+    def is_raw(self) -> bool:
+        return self.type == "raw"
+
+
 class JqlResponse(BaseModel):
     """Structured output from the LLM for a JQL query."""
     jql:           str | None            = None

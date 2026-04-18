@@ -74,11 +74,12 @@ JIRA_ALLOWED_VALUES_FILENAME = "jira_allowed_values.json"
 SYSTEM_PROMPT_FILE              = str(_ROOT / "config" / "system_prompt.md")
 ROUTER_PROMPT_FILE              = str(_ROOT / "config" / "router_prompt.md")
 ROUTER_PROMPT_FILE_OLLAMA       = str(_ROOT / "config" / "router_prompt_ollama.md")
+CHART_SPEC_PROMPT_FILE          = str(_ROOT / "config" / "chart_spec_prompt.md")
 
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
-MAX_RESULTS  = 10
-MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "500"))
+MAX_RESULTS  = 500
+MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "2000"))
 
 # -- Intent field resolution -------------------------------------------
 # Maximum number of extra fields the LLM may propose per query.
@@ -86,8 +87,10 @@ MAX_INTENT_FIELDS = int(os.getenv("MAX_INTENT_FIELDS", "5"))
 
 # Desired standard column IDs — always shown in the frontend.
 # Validated against jira_fields.json at startup; missing IDs are logged and dropped.
+# Override via env: STANDARD_FIELD_IDS=key,summary,assignee,status
+_STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,priority,issuetype,created,resolutiondate"
 STANDARD_FIELD_IDS: list[str] = [
-    "key", "summary", "assignee", "created", "resolutiondate",
+    f.strip() for f in os.getenv("STANDARD_FIELD_IDS", _STANDARD_FIELD_IDS_DEFAULT).split(",") if f.strip()
 ]
 
 
