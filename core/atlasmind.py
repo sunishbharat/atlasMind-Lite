@@ -4,19 +4,21 @@ import re
 from pathlib import Path
 from typing import Any
 
-import httpx
 from document_processor import DocumentProcessor
 from rag.jira_field_embeddings import Jira_Field_Embeddings
 from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
 from core.groq_client import GroqClient
 from core.router import QueryRouter
+from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
-from core.models import JqlResponse
+from core.models import JqlResponse, RouteResult
 from dconfig import EmbeddingsConfig
 from config.jira_config import load_active_profile, get_data_dir, build_jira_auth
 from jira.jira_compute import enrich_issue
+from jira.jira_search import JiraSearchClient, JiraSearchRequest
 from settings import (
+    CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
     JIRA_FIELDS_FILENAME,
     MAX_INTENT_FIELDS,
@@ -299,6 +301,7 @@ class AtlasMind:
         else:
             self.llm_client = OllamaClient()
             self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE_OLLAMA), two_pass=True)
+        self.chart_spec_generator = ChartSpecGenerator(self.llm_client, Path(CHART_SPEC_PROMPT_FILE))
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
         self.system_prompt_dir = Path(SYSTEM_PROMPT_FILE)
 
@@ -383,11 +386,11 @@ class AtlasMind:
         max_results: int = MAX_RESULTS,
         extra_field_ids: list[str] | None = None,
     ) -> dict:
-        """Execute a JQL query against the active Jira instance.
+        """Execute a JQL query against the active Jira instance with automatic pagination.
 
         Args:
             jql: Valid JQL string produced by generate_jql().
-            max_results: Maximum number of issues to return.
+            max_results: Maximum number of issues to return (pages automatically if > 1000).
             extra_field_ids: Additional Jira field IDs to request beyond the base set.
 
         Returns:
@@ -401,48 +404,57 @@ class AtlasMind:
             self.standard_field_ids, extra_field_ids
         ) if self.field_resolver else ",".join(self.standard_field_ids)
 
-        url = f"{base_url}/rest/api/2/search"
-        params = {
-            "jql":        jql,
-            "maxResults": max_results,
-            "fields":     all_fields,
-        }
-
         logger.info("Executing JQL against %s: %s", base_url, jql)
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(
-                    url, params=params, auth=auth,
-                    headers={"Accept": "application/json", **auth_headers},
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            jira_error = ""
-            try:
-                body = exc.response.json()
-                messages = body.get("errorMessages", [])
-                errors = body.get("errors", {})
-                jira_error = "; ".join(messages + list(errors.values()))
-            except Exception:
-                pass
-            msg = jira_error or str(exc)
-            logger.warning("Jira API error (HTTP %s): %s", exc.response.status_code, msg)
-            raise ValueError(f"Jira rejected the JQL: {msg}") from exc
-        except httpx.HTTPError as exc:
-            logger.warning("Jira REST API call failed: %s", exc)
-            raise ValueError(f"Jira connection failed: {exc}") from exc
+        result = await JiraSearchClient().search(
+            JiraSearchRequest(
+                jql=jql,
+                fields=all_fields,
+                max_results=max_results,
+                base_url=base_url,
+                auth=auth,
+                auth_headers=auth_headers,
+            )
+        )
+        return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched}
 
-        payload = response.json()
-        raw_issues = payload.get("issues", [])
-        total = payload.get("total", 0)
-        logger.info("Jira returned %d / %d issues", len(raw_issues), total)
-        return {"jql": jql, "raw_issues": raw_issues, "total": total, "shown": len(raw_issues)}
+    async def _handle_raw_query(self, route: RouteResult) -> tuple[JqlResponse, dict]:
+        """Execute a user-supplied JQL string directly, bypassing RAG and LLM generation.
+
+        Only the LIMIT clause is stripped (unsupported by the Jira REST API).
+        All other sanitization and validation steps are skipped — the user owns this JQL.
+
+        If a chart_hint is present (text right of /raw), a focused LLM call produces
+        the chart_spec; otherwise chart_spec is null.
+
+        Args:
+            route: RouteResult with type="raw", raw_jql, and optional chart_hint.
+
+        Returns:
+            tuple of (JqlResponse, jira_result dict).
+        """
+        jql = _JQL_LIMIT_RE.sub("", route.raw_jql).strip()
+        logger.info("*** Raw JQL: %s", jql)
+
+        chart_spec_dict: dict | None = None
+        if route.chart_hint:
+            spec = await self.chart_spec_generator.generate(route.chart_hint)
+            if spec:
+                chart_spec_dict = spec.model_dump()
+
+        jira_result = await self._execute_query(
+            jql=jql,
+            max_results=_parse_limit(route.chart_hint or ""),
+        )
+        jira_result["resolved_intent_fields"] = ResolvedIntentFields()
+
+        return JqlResponse(jql=jql, chart_spec=chart_spec_dict), jira_result
 
     async def generate_jql(self, query: str) -> tuple[JqlResponse, dict | None]:
         """Generate a JQL query (or general answer) from a natural language request.
 
-        Stage 1: fast route via QueryRouter — classifies as JQL or general answer.
-        Stage 2 (JQL path only): full RAG pipeline, LLM call, intent field resolution,
+        Stage 1: fast route via QueryRouter — classifies as JQL, general, or raw.
+        Stage 2a (raw path): user JQL sent verbatim; optional chart_spec via LLM.
+        Stage 2b (JQL path): full RAG pipeline, LLM call, intent field resolution,
         Jira API execution.
 
         Args:
@@ -458,6 +470,10 @@ class AtlasMind:
         """
         logger.info("*** User query: %s", query)
         route = await self.router.route(query)
+
+        if route.is_raw:
+            return await self._handle_raw_query(route)
+
         if not route.is_jql:
             logger.info("*** AI answer: %s", route.answer)
             return JqlResponse(jql=None, chart_spec=None, answer=route.answer), None

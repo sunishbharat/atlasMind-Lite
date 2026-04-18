@@ -28,6 +28,9 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `GROQ_API_KEY_OCID` | — | OCI Vault secret OCID for `GROQ_API_KEY` (takes priority over `GROQ_API_KEY`) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
 | `JQL_ANNOTATION_FILE` | `data/jira_jql_annotated_queries.md` | Path to JQL annotation file |
+| `MAX_JIRA_RESULTS` | `2000` | Maximum number of Jira issues fetched per query (paginated automatically) |
+| `MAX_INTENT_FIELDS` | `5` | Maximum extra fields the LLM may propose per query |
+| `STANDARD_FIELD_IDS` | `key,summary,assignee,priority,issuetype,created,resolutiondate` | Comma-separated list of Jira field IDs always shown in results — override per project or Docker deployment |
 
 ## Running the app
 
