@@ -1365,3 +1365,40 @@ Sprint = 224
 
 /* 435. List all the issues in sprint id 224,225,226 */
 Sprint in (224,225,226)
+
+/* 436. List linked issues of type Bug, Story, Task, Sub-task in project KAFKA, ZOOKEEPER, or FLINK */
+(project in (KAFKA, ZOOKEEPER, FLINK)) AND issueFunction in linkedIssuesOf("issuetype IN (Bug, Story, Task, 'Sub-task', Improvement)") ORDER BY created DESC
+
+
+/* 437. Open Bugs linked to issues in KAFKA/ZOOKEEPER/FLINK projects */
+(project in (KAFKA, ZOOKEEPER, FLINK)) AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER, FLINK)") AND issuetype = Bug AND resolution is EMPTY ORDER BY priority DESC
+
+
+/* 438. Recent Tasks linked from KAFKA project only */
+project = KAFKA AND issueFunction in linkedIssuesOf("project = KAFKA") AND issuetype = Task ORDER BY created DESC
+
+
+/* 439. Improvements blocking KAFKA/ZOOKEEPER/FLINK issues */
+(project in (KAFKA, ZOOKEEPER, FLINK)) AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER, FLINK)", blocks) AND issuetype = Improvement ORDER BY updated DESC
+
+
+/* 440. High priority issues linked to FLINK Bugs */
+project = FLINK AND issueFunction in linkedIssuesOf("project = FLINK AND issuetype = Bug") AND priority in (Blocker, Critical) ORDER BY priority ASC, created DESC
+
+
+/* 441. All linked issues from ZOOKEEPER project regardless of type */
+project in (KAFKA, ZOOKEEPER, FLINK) AND issueFunction in linkedIssuesOf("project = ZOOKEEPER") ORDER BY created DESC 
+
+
+/* 442. Bugs fixed recently that link to open issues */
+(project in (KAFKA, ZOOKEEPER, FLINK)) AND issuetype = Bug AND resolution = Fixed  AND issueFunction in linkedIssuesOf("resolution is EMPTY") AND updated >= -30d ORDER BY updated DESC
+
+
+/* 444. Tasks assigned to current user with project links */
+issuetype = Task AND project in (KAFKA, ZOOKEEPER, FLINK) AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER, FLINK)") ORDER BY status, created DESC
+
+
+/* 445. Duplicate issues linked across KAFKA/FLINK projects */
+(project in (KAFKA, FLINK)) AND issueFunction in linkedIssuesOf("project in (KAFKA, FLINK)", duplicates) ORDER BY created DESC
+
+
