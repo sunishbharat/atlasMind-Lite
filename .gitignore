@@ -204,6 +204,8 @@ cython_debug/
 !config/system_prompt.md
 !config/router_prompt.md
 !config/router_prompt_ollama.md
+!config/chart_spec_prompt.md
+!config/frontend_contract.md
 
 
 # Atlassian credentials
