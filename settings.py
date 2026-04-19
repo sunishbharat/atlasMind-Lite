@@ -90,7 +90,7 @@ MAX_INTENT_FIELDS = int(os.getenv("MAX_INTENT_FIELDS", "5"))
 # Override via env: STANDARD_FIELD_IDS=key,summary,assignee,status
 _STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,priority,issuetype,created,resolutiondate"
 STANDARD_FIELD_IDS: list[str] = [
-    f.strip() for f in os.getenv("STANDARD_FIELD_IDS", _STANDARD_FIELD_IDS_DEFAULT).split(",") if f.strip()
+    f.strip() for f in (os.getenv("STANDARD_FIELD_IDS") or _STANDARD_FIELD_IDS_DEFAULT).split(",") if f.strip()
 ]
 
 
