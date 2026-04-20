@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 
-from core.atlasmind import AtlasMind, normalize_issue
-from core.field_resolver import ResolvedIntentFields
+from core.atlasmind import AtlasMind, normalize_issue, _FIELD_ID_TO_OUTPUT_KEY
+from core.field_resolver import ExtraField, ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
 from core.client_events import ClientEvent, ClientEventType, EventAck
@@ -110,6 +110,12 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
         "resolved_intent_fields", ResolvedIntentFields()
     )
     extra_fields = resolved.as_extra_fields()
+    if _atlasmind and _atlasmind.field_resolver:
+        intent_ids = set(resolved.field_ids)
+        for fid in _atlasmind.standard_field_ids:
+            if fid not in _FIELD_ID_TO_OUTPUT_KEY and fid not in intent_ids:
+                display = _atlasmind.field_resolver._id_to_name.get(fid, fid)
+                extra_fields.append(ExtraField(field_id=fid, display_name=display))
     requested_ids: set[str] = (
         set(_atlasmind.standard_field_ids) | set(resolved.field_ids)
         if _atlasmind else set()

@@ -191,6 +191,84 @@ class TestFieldResolverValidateFieldIds:
             resolver.validate_field_ids(["customfield_10016", "bad_id"], {"customfield_10016"})
         assert any("bad_id" in m for m in caplog.messages)
 
+    def test_validate_display_name_resolves_to_field_id(self, resolver):
+        known = {"customfield_10016", "customfield_10020"}
+        result = resolver.validate_field_ids(["Story Points"], known)
+        assert result == ["customfield_10016"]
+
+    def test_validate_field_id_directly(self, resolver):
+        known = {"customfield_10016"}
+        result = resolver.validate_field_ids(["customfield_10016"], known)
+        assert result == ["customfield_10016"]
+
+    def test_validate_mixed_ids_and_display_names(self, resolver):
+        known = {"customfield_10016", "customfield_10020", "assignee"}
+        result = resolver.validate_field_ids(
+            ["customfield_10016", "Sprint", "assignee"], known
+        )
+        assert result == ["customfield_10016", "customfield_10020", "assignee"]
+
+    def test_validate_display_name_case_insensitive(self, resolver):
+        known = {"customfield_10016"}
+        assert resolver.validate_field_ids(["STORY POINTS"], known) == ["customfield_10016"]
+        assert resolver.validate_field_ids(["story points"], known) == ["customfield_10016"]
+
+    def test_validate_display_name_unknown_still_dropped(self, resolver):
+        known = {"customfield_10016"}
+        result = resolver.validate_field_ids(["NonExistentFieldName"], known)
+        assert result == []
+
+
+# ===========================================================================
+# Standard custom field extraction (via ExtraField in normalize_issue)
+# ===========================================================================
+
+class TestStandardCustomFieldExtraction:
+    """Verifies that standard custom fields are extractable via the ExtraField
+    path — i.e. field ID → display name → value round-trip works in both
+    directions (ID given, name given after validate_field_ids resolution)."""
+
+    def test_custom_field_extracted_by_id(self, raw_jira_issue):
+        raw_jira_issue["fields"]["customfield_1234"] = {"name": "newyork team"}
+        ef = ExtraField(field_id="customfield_1234", display_name="Domain")
+        result = normalize_issue(raw_jira_issue, extra_fields=[ef])
+        assert result["Domain"] == "newyork team"
+
+    def test_custom_field_extracted_after_name_resolution(self, raw_jira_issue, resolver):
+        # Simulate: user wrote "Story Points" in STANDARD_FIELD_IDS.
+        # validate_field_ids resolves it to "customfield_10016".
+        # normalize_issue then extracts value via ExtraField.
+        raw_jira_issue["fields"]["customfield_10016"] = 8
+        known = {"customfield_10016"}
+        resolved_ids = resolver.validate_field_ids(["Story Points"], known)
+        assert resolved_ids == ["customfield_10016"]
+
+        display = resolver.display_names_for_ids(resolved_ids)
+        assert display == ["Story Points"]
+
+        ef = ExtraField(field_id=resolved_ids[0], display_name=display[0])
+        result = normalize_issue(raw_jira_issue, extra_fields=[ef])
+        assert result["Story Points"] == 8
+
+    def test_custom_field_string_value(self, raw_jira_issue):
+        raw_jira_issue["fields"]["customfield_5678"] = "Chicago"
+        ef = ExtraField(field_id="customfield_5678", display_name="Office")
+        result = normalize_issue(raw_jira_issue, extra_fields=[ef])
+        assert result["Office"] == "Chicago"
+
+    def test_custom_field_list_value(self, raw_jira_issue):
+        raw_jira_issue["fields"]["customfield_9999"] = [
+            {"name": "alpha"}, {"name": "beta"}
+        ]
+        ef = ExtraField(field_id="customfield_9999", display_name="Tags")
+        result = normalize_issue(raw_jira_issue, extra_fields=[ef])
+        assert result["Tags"] == ["alpha", "beta"]
+
+    def test_custom_field_missing_returns_none(self, raw_jira_issue):
+        ef = ExtraField(field_id="customfield_0000", display_name="Ghost")
+        result = normalize_issue(raw_jira_issue, extra_fields=[ef])
+        assert result["Ghost"] is None
+
 
 # ===========================================================================
 # FieldResolver — build_fields_param()
