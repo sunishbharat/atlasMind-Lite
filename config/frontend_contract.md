@@ -131,6 +131,28 @@ Content-Type: application/json
 
 ---
 
+## Issue field lookup — one rule for all fields
+
+Every entry in `display_fields` is the exact key to use when reading a value
+from an issue dict. This applies uniformly to standard fields, custom fields,
+and LLM-proposed intent fields — there is no special-casing by field type.
+
+```ts
+// Correct — works for all field types
+display_fields.forEach(fieldName => {
+  const value = issue[fieldName];   // e.g. issue["Domain"] → "newyork team"
+});
+
+// Wrong — hardcoding snake_case keys breaks custom fields
+const status = issue["status"];     // ok for status
+const domain = issue["domain"];     // wrong — key is "Domain", not "domain"
+```
+
+`issues` values are already display-ready (name strings, not raw Jira objects).
+A `null` value means the field was requested but empty for that issue.
+
+---
+
 ## Type definitions (TypeScript)
 
 ```ts

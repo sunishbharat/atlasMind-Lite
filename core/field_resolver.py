@@ -178,6 +178,10 @@ class FieldResolver:
         """
         Filter a list of field IDs to those present in the vector DB.
 
+        Accepts both raw field IDs (e.g. "customfield_1234") and display names
+        (e.g. "Domain"). Display names are resolved to their field ID via
+        name_to_id before validation, so STANDARD_FIELD_IDS may use either form.
+
         The caller supplies known_ids derived from the id_to_name mapping
         returned by Jira_Field_Embeddings.fetch_field_mappings(), making the
         vector DB the authoritative source rather than the local JSON file.
@@ -186,11 +190,12 @@ class FieldResolver:
         validate STANDARD_FIELD_IDS before any queries.
 
         Args:
-            field_ids:  Desired field IDs (e.g. from settings.py).
+            field_ids:  Desired field IDs or display names (e.g. from settings.py).
             known_ids:  Set of field_ids currently indexed in the vector DB.
 
         Returns:
-            Subset of field_ids that exist in the DB, in original order.
+            Subset of field_ids (resolved to raw IDs) that exist in the DB,
+            in original order.
         """
         valid: list[str] = []
         missing: list[str] = []
@@ -198,7 +203,14 @@ class FieldResolver:
             if fid in known_ids:
                 valid.append(fid)
             else:
-                missing.append(fid)
+                resolved = self._name_to_id.get(fid.strip().lower())
+                if resolved and resolved in known_ids:
+                    logger.info(
+                        "STANDARD_FIELD_IDS: %r resolved to field ID %r", fid, resolved
+                    )
+                    valid.append(resolved)
+                else:
+                    missing.append(fid)
         if missing:
             logger.warning(
                 "Field IDs not found in vector DB (excluded from use): %s", missing
