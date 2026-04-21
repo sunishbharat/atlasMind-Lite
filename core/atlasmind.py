@@ -21,6 +21,8 @@ from settings import (
     CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
     JIRA_FIELDS_FILENAME,
+    JQL_RETRY_FIELD_TEMPLATE,
+    JQL_RETRY_TEMPLATE,
     MAX_INTENT_FIELDS,
     MAX_JIRA_RESULTS,
     MAX_RESULTS,
@@ -42,7 +44,7 @@ _LIMIT_RE = re.compile(
 )
 # Strip quotes from purely-numeric values in JQL (e.g. Sprint in ('224') → Sprint in (224)).
 _JQL_QUOTED_NUMBER_RE = re.compile(r"""(['"])(\d+)\1""")
-_JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+\s*$", re.IGNORECASE)
+_JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+", re.IGNORECASE)
 _JQL_ARITHMETIC_ORDER_RE = re.compile(r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE)
 # Matches field-to-field date arithmetic in WHERE conditions, e.g.
 #   AND resolutiondate > created + 20d
@@ -69,6 +71,55 @@ _JQL_AND_IN_RE = re.compile(
     r"""\s+AND\s+([\w\[\]]+)\s+(NOT\s+IN|IN)\s*\(([\s\S]*?)\)""",
     re.IGNORECASE,
 )
+
+
+_JIRA_ERROR_FIELD_RE = re.compile(
+    r"Field '(\w+)' does not exist"
+    r"|'(\w+)' is a reserved JQL word",
+    re.IGNORECASE,
+)
+
+
+def _extract_json_object(raw: str) -> str:
+    """Extract the first complete JSON object from raw LLM output.
+
+    Small models often append extra content after the closing brace, or leak
+    keys outside the object. Tracks brace depth to find the exact end of the
+    first well-formed object rather than relying on rfind('}').
+    """
+    start = raw.find("{")
+    if start == -1:
+        return raw
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(raw[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start:i + 1]
+    return raw[start:]
+
+
+def _extract_error_field(error_msg: str) -> str | None:
+    """Return the invalid field name from a Jira error message, or None if not identifiable."""
+    m = _JIRA_ERROR_FIELD_RE.search(error_msg)
+    if m:
+        return next(g for g in m.groups() if g is not None)
+    return None
 
 
 def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
@@ -404,8 +455,14 @@ class AtlasMind:
             self.standard_field_ids, extra_field_ids
         ) if self.field_resolver else ",".join(self.standard_field_ids)
 
+        client = JiraSearchClient()
+        jql_error = await client.validate_jql(jql, base_url, auth, auth_headers)
+        if jql_error:
+            logger.warning("JQL validation failed: %s | JQL: %s", jql_error, jql)
+            raise ValueError(f"Jira rejected the JQL: {jql_error}")
+
         logger.info("Executing JQL against %s: %s", base_url, jql)
-        result = await JiraSearchClient().search(
+        result = await client.search(
             JiraSearchRequest(
                 jql=jql,
                 fields=all_fields,
@@ -483,7 +540,7 @@ class AtlasMind:
         logger.debug("LLM raw response: %s", raw)
 
         try:
-            data = json.loads(raw, strict=False)
+            data = json.loads(_extract_json_object(raw), strict=False)
         except json.JSONDecodeError as exc:
             raise ValueError(f"LLM response is not valid JSON: {raw!r}") from exc
 
@@ -493,34 +550,7 @@ class AtlasMind:
 
         jira_result = None
         if llm_result.jql:
-            clean_jql = _JQL_LIMIT_RE.sub("", llm_result.jql).strip()
-            if clean_jql != llm_result.jql:
-                logger.info("JQL after LIMIT strip: %s", clean_jql)
-
-            stripped = _JQL_ARITHMETIC_ORDER_RE.sub("", clean_jql).strip()
-            if stripped != clean_jql:
-                logger.warning(
-                    "JQL contained arithmetic in ORDER BY — stripped: %s", clean_jql
-                )
-                clean_jql = stripped
-
-            stripped = _JQL_FIELD_ARITH_COND_RE.sub("", clean_jql).strip()
-            if stripped != clean_jql:
-                logger.warning(
-                    "JQL contained field-to-field date arithmetic in WHERE (unsupported by Jira) — stripped: %s",
-                    clean_jql,
-                )
-                clean_jql = stripped
-
-            unquoted = _JQL_QUOTED_NUMBER_RE.sub(r"\2", clean_jql)
-            if unquoted != clean_jql:
-                logger.info("JQL after numeric dequote: %s", unquoted)
-                clean_jql = unquoted
-
-            validated = _validate_jql_values(clean_jql, self.allowed_values)
-            if validated != clean_jql:
-                logger.info("JQL after allowed-values validation: %s", validated)
-                clean_jql = validated
+            clean_jql = self._sanitize_jql(llm_result.jql)
 
             resolved = (
                 self.field_resolver.resolve(llm_result.intent_fields)
@@ -535,12 +565,80 @@ class AtlasMind:
             combined_extra: list[str] = list(
                 dict.fromkeys((resolved.field_ids or []) + rag_field_ids)
             )
+            max_results = _parse_limit(query)
 
-            jira_result = await self._execute_query(
-                jql=clean_jql,
-                max_results=_parse_limit(query),
-                extra_field_ids=combined_extra or None,
-            )
+            try:
+                jira_result = await self._execute_query(
+                    jql=clean_jql,
+                    max_results=max_results,
+                    extra_field_ids=combined_extra or None,
+                )
+            except ValueError as exc:
+                logger.warning("JQL attempt 1 failed — retrying with error context")
+                logger.warning("  Bad JQL : %s", clean_jql)
+                logger.warning("  Error   : %s", exc)
+
+                error_field = _extract_error_field(str(exc))
+                if error_field:
+                    logger.warning("  Bad field: %s — using targeted retry prompt", error_field)
+                    retry_prompt = prompt + JQL_RETRY_FIELD_TEMPLATE.format(
+                        field=error_field,
+                        bad_jql=clean_jql,
+                    )
+                else:
+                    retry_prompt = prompt + JQL_RETRY_TEMPLATE.format(
+                        bad_jql=clean_jql,
+                        error=exc,
+                    )
+                retry_raw = await self.llm_client.generate_jql(retry_prompt)
+                logger.debug("LLM retry raw response: %s", retry_raw)
+
+                try:
+                    retry_data = json.loads(_extract_json_object(retry_raw), strict=False)
+                except json.JSONDecodeError as parse_exc:
+                    raise ValueError(f"LLM retry response is not valid JSON: {retry_raw!r}") from parse_exc
+
+                llm_result = JqlResponse(**retry_data)
+                clean_jql = self._sanitize_jql(llm_result.jql or "")
+                logger.info("*** AI JQL (retry): %s", clean_jql)
+
+                jira_result = await self._execute_query(
+                    jql=clean_jql,
+                    max_results=max_results,
+                    extra_field_ids=combined_extra or None,
+                )
+
             jira_result["resolved_intent_fields"] = resolved
 
         return llm_result, jira_result
+
+    def _sanitize_jql(self, jql: str) -> str:
+        """Apply all deterministic JQL cleanup passes in order."""
+        clean = _JQL_LIMIT_RE.sub("", jql).strip()
+        if clean != jql:
+            logger.info("JQL after LIMIT strip: %s", clean)
+
+        stripped = _JQL_ARITHMETIC_ORDER_RE.sub("", clean).strip()
+        if stripped != clean:
+            logger.warning("JQL contained arithmetic in ORDER BY — stripped: %s", clean)
+            clean = stripped
+
+        stripped = _JQL_FIELD_ARITH_COND_RE.sub("", clean).strip()
+        if stripped != clean:
+            logger.warning(
+                "JQL contained field-to-field date arithmetic in WHERE (unsupported by Jira) — stripped: %s",
+                clean,
+            )
+            clean = stripped
+
+        unquoted = _JQL_QUOTED_NUMBER_RE.sub(r"\2", clean)
+        if unquoted != clean:
+            logger.info("JQL after numeric dequote: %s", unquoted)
+            clean = unquoted
+
+        validated = _validate_jql_values(clean, self.allowed_values)
+        if validated != clean:
+            logger.info("JQL after allowed-values validation: %s", validated)
+            clean = validated
+
+        return clean

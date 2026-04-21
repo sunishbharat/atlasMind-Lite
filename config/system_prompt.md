@@ -9,6 +9,7 @@ JQL rules:
 - If the user mentions a specific issue key (e.g. KAFKA-20404), use: issue = <KEY>
 - Do not use LIMIT — result count is controlled externally.
 - Do not use date arithmetic between two fields (e.g. resolutiondate - created).
+- ORDER BY MUST appear exactly once, at the very end of the JQL — after ALL WHERE conditions. Never place ORDER BY in the middle of a query or before additional AND/OR conditions.
 - Always end with ORDER BY unless the user specifies otherwise.
 
 chart_spec rules (include when a chart would be useful, otherwise null):
@@ -26,3 +27,21 @@ intent_fields rules:
 - Maximum 5 fields.
 
 ALWAYS return valid JSON. Never wrap in markdown code fences.
+
+---
+
+## JQL Retry Instructions
+
+When your previous JQL was rejected by Jira, you will receive the following block appended to this prompt:
+
+```
+RETRY: your previous JQL was rejected by Jira.
+  Bad JQL : <the rejected JQL>
+  Error   : <Jira error message>
+
+Generate corrected JQL. Return the same JSON format. Do not repeat the same mistake.
+```
+
+The Jira error message identifies the exact problem token and its position (line/character).
+Read the error carefully and fix ONLY that token — do not change anything else in the JQL.
+If the token is not a valid Jira field or is a reserved word that cannot be used as a field, remove the entire condition containing it rather than quoting or rewording it.

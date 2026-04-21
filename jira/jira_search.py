@@ -50,6 +50,39 @@ class JiraSearchResult(BaseModel):
 class JiraSearchClient:
     """Fetches Jira issues with automatic pagination across the 1000-issue-per-page cap."""
 
+    async def validate_jql(
+        self,
+        jql: str,
+        base_url: str,
+        auth: tuple[str, str] | None,
+        auth_headers: dict[str, str],
+    ) -> str | None:
+        """Validate JQL without fetching issues using maxResults=0.
+
+        Returns the Jira error message string if invalid, None if valid.
+        """
+        url = f"{base_url.rstrip('/')}/rest/api/2/search"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(
+                    url,
+                    params={"jql": jql, "maxResults": 0},
+                    auth=auth if auth and any(auth) else None,
+                    headers={"Accept": "application/json", **auth_headers},
+                )
+                response.raise_for_status()
+            return None
+        except httpx.HTTPStatusError as exc:
+            try:
+                body = exc.response.json()
+                messages = body.get("errorMessages", [])
+                errors = body.get("errors", {})
+                return "; ".join(messages + list(errors.values())) or str(exc)
+            except Exception:
+                return str(exc)
+        except httpx.HTTPError as exc:
+            return str(exc)
+
     async def search(self, request: JiraSearchRequest) -> JiraSearchResult:
         url = f"{request.base_url}/rest/api/2/search"
         issues: list[dict[str, Any]] = []

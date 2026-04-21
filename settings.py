@@ -76,6 +76,24 @@ ROUTER_PROMPT_FILE              = str(_ROOT / "config" / "router_prompt.md")
 ROUTER_PROMPT_FILE_OLLAMA       = str(_ROOT / "config" / "router_prompt_ollama.md")
 CHART_SPEC_PROMPT_FILE          = str(_ROOT / "config" / "chart_spec_prompt.md")
 
+JQL_RETRY_TEMPLATE = (
+    "\n\nRETRY: your previous JQL was rejected by Jira.\n"
+    "  Bad JQL : {bad_jql}\n"
+    "  Error   : {error}\n\n"
+    "Generate corrected JQL. Return the same JSON format. Do not repeat the same mistake."
+)
+
+# Used when the Jira error identifies a specific invalid field by name.
+# More directive than JQL_RETRY_TEMPLATE — suited for small models that need
+# explicit instruction rather than general guidance.
+JQL_RETRY_FIELD_TEMPLATE = (
+    "\n\nRETRY: '{field}' is not a valid JQL field.\n"
+    "  Bad JQL : {bad_jql}\n\n"
+    "Remove the entire condition containing '{field}' from the JQL.\n"
+    "Do not quote it, do not rename it — remove it entirely.\n"
+    "Return corrected JQL in the same JSON format."
+)
+
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
 MAX_RESULTS  = 500
