@@ -27,6 +27,16 @@ OLLAMA_TOP_P          = float(os.getenv("JQL_OLLAMA_TOP_P",        "0.5"))
 OLLAMA_TOP_K          = int(os.getenv("JQL_OLLAMA_TOP_K",          "20"))
 OLLAMA_REPEAT_PENALTY = float(os.getenv("JQL_OLLAMA_REPEAT_PENALTY", "1.1"))
 
+# -- vLLM local inference server ---------------------------------------
+# VLLM_MODEL: auto-detected from /v1/models if left empty.
+# VLLM_API_KEY: only needed if vLLM was started with --api-key.
+VLLM_URL         = os.getenv("VLLM_URL",          "http://localhost:8000")
+VLLM_MODEL       = os.getenv("VLLM_MODEL",         "")
+VLLM_TEMPERATURE = float(os.getenv("VLLM_TEMPERATURE", "0.1"))
+VLLM_TIMEOUT     = int(os.getenv("VLLM_TIMEOUT",    "240"))
+VLLM_MAX_TOKENS  = int(os.getenv("VLLM_MAX_TOKENS", "500"))
+VLLM_API_KEY     = os.getenv("VLLM_API_KEY",        "")
+
 # -- Groq cloud LLM ---------------------------------------------------
 # GROQ_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
 # GROQ_API_KEY: used as plaintext fallback for local development.

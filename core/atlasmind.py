@@ -9,6 +9,7 @@ from rag.jira_field_embeddings import Jira_Field_Embeddings
 from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
 from core.groq_client import GroqClient
+from core.vllm_client import VllmClient
 from core.router import QueryRouter
 from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
@@ -348,6 +349,9 @@ class AtlasMind:
 
         if llm_backend == "groq":
             self.llm_client = GroqClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
+        elif llm_backend == "vllm":
+            self.llm_client = VllmClient()
             self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
         else:
             self.llm_client = OllamaClient()
