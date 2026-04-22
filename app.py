@@ -34,7 +34,7 @@ from rich.rule import Rule
 from core.atlasmind import AtlasMind
 from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
-from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL
+from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL, VLLM_MODEL, VLLM_URL
 
 console = Console()
 
@@ -67,7 +67,12 @@ _HELP_COMMANDS = {"am help", "am ?", "?"}
 
 def _print_banner(llm_backend: str = "ollama") -> None:
     f = Figlet(font="slant")
-    llm_model = GROQ_MODEL if llm_backend == "groq" else OLLAMA_MODEL
+    if llm_backend == "groq":
+        llm_model = GROQ_MODEL
+    elif llm_backend == "vllm":
+        llm_model = VLLM_MODEL or "(auto-detected)"
+    else:
+        llm_model = OLLAMA_MODEL
     console.print(BORDER_UP)
     console.print(f.renderText("AtlasMind"))
     console.print(
@@ -221,6 +226,7 @@ def main() -> None:
             "  python app.py --query                        # interactive REPL (local Ollama)\n"
             "  python app.py --query 'list open bugs'       # single-shot query\n"
             "  python app.py --query --model groq           # REPL using Groq cloud\n"
+            "  python app.py --query --model vllm           # REPL using local vLLM server\n"
             "  python app.py --server                       # start FastAPI server\n"
             "  python app.py --server --model groq --port 9000\n"
             "\n"
@@ -249,10 +255,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        choices=["ollama", "groq"],
+        choices=["ollama", "groq", "vllm"],
         default="ollama",
         metavar="BACKEND",
-        help="LLM backend: 'ollama' (local, default) or 'groq' (cloud)",
+        help="LLM backend: 'ollama' (local, default), 'vllm' (local high-throughput), or 'groq' (cloud)",
     )
     parser.add_argument(
         "--host",
