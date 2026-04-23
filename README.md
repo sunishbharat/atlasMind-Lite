@@ -231,6 +231,247 @@ priority = High AND created >= startOfWeek() ORDER BY created DESC
 
 Fetched automatically on first run from `/rest/api/2/field`. Keyed by field ID. A companion `jira_allowed_values.json` is also fetched and merged in to enrich descriptions with discrete option lists (e.g. status values, issue types).
 
+## Running vLLM on a GPU system (GPU inference server)
+
+AtlasMind on OCI A1 can offload all LLM inference to a local GPU system over Tailscale. Only vLLM needs to run on the GPU system — no database, no AtlasMind installation required there.
+
+### What runs where
+
+| Machine | What runs |
+|---------|-----------|
+| GPU system | vLLM only — serves the model over HTTP |
+| OCI A1 (always-on) | AtlasMind + Postgres + Ollama (fallback) + frontend |
+
+AtlasMind on OCI A1 sends prompts to vLLM on the GPU system over Tailscale. When the GPU system is off, AtlasMind falls back to its local Ollama automatically.
+
+### Step 1 — Install WSL2 (Windows only)
+
+vLLM does not run natively on Windows. You need WSL2 with Ubuntu.
+
+Open PowerShell as Administrator and run:
+
+```powershell
+wsl --install
+```
+
+Restart when prompted. After restart, Ubuntu opens and asks you to create a username and password. This is your Linux environment — all remaining steps run inside WSL2.
+
+To open WSL2 later: search for **Ubuntu** in the Start menu, or run `wsl` in any terminal.
+
+### Step 2 — Install CUDA toolkit inside WSL2
+
+vLLM needs NVIDIA's CUDA libraries to use the GPU. Run inside WSL2:
+
+```bash
+# add the NVIDIA package repository
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+
+# install CUDA toolkit (this takes a few minutes)
+sudo apt-get install -y cuda-toolkit-12-4
+```
+
+Verify the GPU is visible:
+
+```bash
+nvidia-smi
+```
+
+You should see your RTX 4060 listed with driver version and VRAM. If this command fails, the NVIDIA driver is not correctly bridged to WSL2 — reinstall the latest NVIDIA driver on Windows first, then retry.
+
+### Step 3 — Install Python and vLLM
+
+```bash
+# install pip if not present
+sudo apt-get install -y python3-pip
+
+# install vLLM (pulls in PyTorch with CUDA support automatically)
+pip install vllm
+```
+
+This download is large (~5 GB). Let it complete fully before continuing.
+
+### Step 4 — Choose and run a model
+
+With 8 GB VRAM, use a quantized 7B model. AWQ quantization gives the best quality-to-size ratio and is natively supported by vLLM.
+
+Recommended for AtlasMind (reliable structured JSON output):
+
+```bash
+vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
+  --quantization awq \
+  --port 8000 \
+  --host 0.0.0.0
+```
+
+On first run, this downloads the model weights from HuggingFace (~4.5 GB). Subsequent runs load from the local cache. Wait until you see:
+
+```
+INFO:     Application startup complete.
+```
+
+The server is now listening on port 8000.
+
+**Alternative models** (all fit in 8 GB VRAM with AWQ):
+
+| Model | Command |
+|-------|---------|
+| Llama 3.1 8B | `vllm serve meta-llama/Llama-3.1-8B-Instruct-AWQ --quantization awq --port 8000 --host 0.0.0.0` |
+| Mistral 7B | `vllm serve TheBloke/Mistral-7B-Instruct-v0.2-AWQ --quantization awq --port 8000 --host 0.0.0.0` |
+
+### Step 5 — Verify the server is running
+
+From WSL2, confirm the API responds:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
+You should see a JSON response listing the loaded model name.
+
+### Step 6 — Configure AtlasMind on OCI A1
+
+On the OCI A1 machine, set the following environment variables before starting AtlasMind:
+
+```bash
+export VLLM_URL=http://<katana-tailscale-ip>:8000
+```
+
+Replace `<katana-tailscale-ip>` with the GPU system's Tailscale IP address (find it by running `tailscale ip` in WSL2 on the GPU system).
+
+Then start AtlasMind with the vLLM backend:
+
+```bash
+uv run python app.py --server --model vllm
+```
+
+AtlasMind auto-detects the loaded model from vLLM's `/v1/models` endpoint — no need to set the model name explicitly.
+
+### Keeping vLLM running across WSL2 sessions
+
+WSL2 shuts down when you close the terminal. To keep vLLM running in the background:
+
+```bash
+nohup vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
+  --quantization awq \
+  --port 8000 \
+  --host 0.0.0.0 > ~/vllm.log 2>&1 &
+```
+
+Logs go to `~/vllm.log`. Check them with `tail -f ~/vllm.log`.
+
+---
+
+## Setting up Tailscale for vLLM access
+
+Tailscale creates a private network between your GPU system and OCI A1, so AtlasMind can reach vLLM securely without exposing any ports to the internet.
+
+### Step 1 — Install Tailscale on Windows
+
+Download and install Tailscale from [tailscale.com/download](https://tailscale.com/download). Run the installer and sign in with your Tailscale account (Google, GitHub, or Microsoft login).
+
+Once signed in, Tailscale assigns your Windows machine a private IP in the `100.x.x.x` range. You will see the Tailscale icon in the system tray.
+
+### Step 2 — Enable WSL2 mirrored networking
+
+By default, WSL2 runs in its own isolated network. Mirrored networking mode makes WSL2 ports (including vLLM on port 8000) directly accessible via the Windows host's Tailscale IP — no manual port forwarding needed.
+
+Create or edit `C:\Users\<your-username>\.wslconfig` in Notepad:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+Save the file, then restart WSL2:
+
+```powershell
+wsl --shutdown
+```
+
+Reopen Ubuntu. From this point, anything running in WSL2 on port 8000 is reachable on the Windows machine's Tailscale IP.
+
+> **Windows version requirement:** Mirrored networking requires Windows 11 22H2 or later and WSL2 version 2.0+. Check your WSL version with `wsl --version`. If mirrored mode is unavailable, see the port forwarding fallback below.
+
+### Step 3 — Find your Tailscale IP
+
+In WSL2, run:
+
+```bash
+tailscale ip
+```
+
+Or on the Windows side, click the Tailscale system tray icon — your IP is shown at the top. It will look like `100.x.x.x`.
+
+Note this IP — you will set it as `VLLM_URL` on OCI A1.
+
+### Step 4 — Install Tailscale on OCI A1
+
+On the OCI A1 instance, run:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+Follow the authentication link printed in the terminal to connect OCI A1 to the same Tailscale account. Once authenticated, OCI A1 and your GPU system are on the same private network.
+
+### Step 5 — Verify connectivity
+
+From OCI A1, confirm it can reach vLLM on the GPU system (replace with your actual Tailscale IP):
+
+```bash
+curl http://100.x.x.x:8000/v1/models
+```
+
+You should get back a JSON response listing the loaded model. If the request times out, check that:
+- vLLM is running in WSL2 with `--host 0.0.0.0`
+- WSL2 mirrored networking is active (`wsl --version` shows 2.0+)
+- Both machines show as **Connected** in the Tailscale admin console at [login.tailscale.com](https://login.tailscale.com)
+- Windows Firewall is not blocking port 8000 (add an inbound rule if needed)
+
+### Step 6 — Configure AtlasMind
+
+On OCI A1, set the Tailscale IP before starting the server:
+
+```bash
+export VLLM_URL=http://100.x.x.x:8000
+uv run python app.py --server --model vllm
+```
+
+---
+
+### Port forwarding fallback (if mirrored networking is unavailable)
+
+If you cannot enable mirrored networking, manually forward port 8000 from Windows to WSL2.
+
+First, find the WSL2 internal IP (run inside WSL2):
+
+```bash
+hostname -I
+```
+
+Note the IP (e.g. `172.x.x.x`). Then run this in PowerShell as Administrator on Windows:
+
+```powershell
+netsh interface portproxy add v4tov4 `
+  listenport=8000 listenaddress=0.0.0.0 `
+  connectport=8000 connectaddress=172.x.x.x
+```
+
+Replace `172.x.x.x` with the WSL2 IP from above. This rule forwards traffic arriving on Windows port 8000 (including via Tailscale) into WSL2 where vLLM is listening.
+
+To remove the rule later:
+
+```powershell
+netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
+```
+
+> Note: The WSL2 internal IP changes on each WSL2 restart. Re-run `hostname -I` and update the port proxy rule each time if using this fallback.
+
+---
+
 ## Running tests
 
 ```bash
