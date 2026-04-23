@@ -258,52 +258,56 @@ Restart when prompted. After restart, Ubuntu opens and asks you to create a user
 
 To open WSL2 later: search for **Ubuntu** in the Start menu, or run `wsl` in any terminal.
 
-### Step 2 — Install CUDA toolkit inside WSL2
+### Step 2 — Verify the GPU is visible in WSL2
 
-vLLM needs NVIDIA's CUDA libraries to use the GPU. Run inside WSL2:
+The NVIDIA driver is automatically bridged from Windows into WSL2 — no separate CUDA toolkit installation needed. vLLM's pip package bundles the CUDA runtime libraries it needs.
 
-```bash
-# add the NVIDIA package repository
-wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
-sudo apt-get update
-
-# install CUDA toolkit (this takes a few minutes)
-sudo apt-get install -y cuda-toolkit-12-4
-```
-
-Verify the GPU is visible:
+Run inside WSL2:
 
 ```bash
 nvidia-smi
 ```
 
-You should see your RTX 4060 listed with driver version and VRAM. If this command fails, the NVIDIA driver is not correctly bridged to WSL2 — reinstall the latest NVIDIA driver on Windows first, then retry.
+You should see your GPU listed with driver version and VRAM. If this command fails, reinstall the latest NVIDIA driver on Windows first, then retry.
 
-### Step 3 — Install Python and vLLM
+### Step 3 — Install vLLM in a virtual environment
+
+Ubuntu 24.04 does not allow system-wide pip installs. Use a virtual environment:
 
 ```bash
-# install pip if not present
-sudo apt-get install -y python3-pip
-
-# install vLLM (pulls in PyTorch with CUDA support automatically)
+python3 -m venv ~/vllm-env
+source ~/vllm-env/bin/activate
 pip install vllm
 ```
 
-This download is large (~5 GB). Let it complete fully before continuing.
+After activation you will see `(vllm-env)` in your prompt. This download is large (~5 GB) — let it complete fully before continuing.
+
+Always activate the environment before running vLLM in future sessions:
+
+```bash
+source ~/vllm-env/bin/activate
+```
 
 ### Step 4 — Choose and run a model
 
 With 8 GB VRAM, use a quantized 7B model. AWQ quantization gives the best quality-to-size ratio and is natively supported by vLLM.
 
-Recommended for AtlasMind (reliable structured JSON output):
+Recommended for AtlasMind (reliable structured JSON and JQL output):
 
 ```bash
-vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
+vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
   --quantization awq \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 8192 \
   --port 8000 \
   --host 0.0.0.0
 ```
+
+`Qwen2.5-Coder` is preferred over the general instruct variant because JQL is a query language (similar to SQL). The Coder model is trained on code and structured DSLs, making it more reliable at generating syntactically correct JQL and strictly following the JSON output format (`jql`, `intent_fields`, `chart_spec`, `answer`).
+
+`--gpu-memory-utilization 0.85` reserves 85% of VRAM for vLLM. The default is 0.9 (90%) which can exceed available VRAM on 8 GB cards due to Windows/WSL2 overhead. Lower to `0.80` if startup still fails.
+
+`--max-model-len 8192` caps the context window at 8192 tokens. The model's default (32768) requires more KV cache than fits in 8 GB after loading weights. 8192 is sufficient for AtlasMind — typical prompts (system prompt + RAG examples + query) are 1500–2500 tokens.
 
 On first run, this downloads the model weights from HuggingFace (~4.5 GB). Subsequent runs load from the local cache. Wait until you see:
 
@@ -315,10 +319,10 @@ The server is now listening on port 8000.
 
 **Alternative models** (all fit in 8 GB VRAM with AWQ):
 
-| Model | Command |
-|-------|---------|
-| Llama 3.1 8B | `vllm serve meta-llama/Llama-3.1-8B-Instruct-AWQ --quantization awq --port 8000 --host 0.0.0.0` |
-| Mistral 7B | `vllm serve TheBloke/Mistral-7B-Instruct-v0.2-AWQ --quantization awq --port 8000 --host 0.0.0.0` |
+| Model | VRAM | Notes |
+|-------|------|-------|
+| `Qwen/Qwen2.5-7B-Instruct-AWQ` | ~4.5 GB | General instruct, solid fallback |
+| `meta-llama/Llama-3.1-8B-Instruct-AWQ` | ~5.5 GB | Strong reasoning, good alternative |
 
 ### Step 5 — Verify the server is running
 
@@ -353,8 +357,11 @@ AtlasMind auto-detects the loaded model from vLLM's `/v1/models` endpoint — no
 WSL2 shuts down when you close the terminal. To keep vLLM running in the background:
 
 ```bash
-nohup vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
+source ~/vllm-env/bin/activate
+nohup vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
   --quantization awq \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 8192 \
   --port 8000 \
   --host 0.0.0.0 > ~/vllm.log 2>&1 &
 ```
@@ -394,7 +401,30 @@ Reopen Ubuntu. From this point, anything running in WSL2 on port 8000 is reachab
 
 > **Windows version requirement:** Mirrored networking requires Windows 11 22H2 or later and WSL2 version 2.0+. Check your WSL version with `wsl --version`. If mirrored mode is unavailable, see the port forwarding fallback below.
 
-### Step 3 — Find your Tailscale IP
+### Step 3 — Restarting vLLM after WSL2 shutdown
+
+WSL2 resets completely on every shutdown (`wsl --shutdown`, PC restart, or closing the terminal) — all running processes including vLLM are killed. You must restart vLLM each time WSL2 comes back up.
+
+To make this less tedious, add a shell alias to your `~/.bashrc`:
+
+```bash
+echo "alias start-vllm='source ~/vllm-env/bin/activate && vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ --quantization awq --gpu-memory-utilization 0.85 --max-model-len 8192 --port 8000 --host 0.0.0.0'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then to start vLLM in any future session:
+
+```bash
+start-vllm
+```
+
+Or in the background:
+
+```bash
+start-vllm > ~/vllm.log 2>&1 &
+```
+
+### Step 5 — Find your Tailscale IP
 
 In WSL2, run:
 
@@ -406,7 +436,7 @@ Or on the Windows side, click the Tailscale system tray icon — your IP is show
 
 Note this IP — you will set it as `VLLM_URL` on OCI A1.
 
-### Step 4 — Install Tailscale on OCI A1
+### Step 6 — Install Tailscale on OCI A1
 
 On the OCI A1 instance, run:
 
@@ -417,7 +447,7 @@ sudo tailscale up
 
 Follow the authentication link printed in the terminal to connect OCI A1 to the same Tailscale account. Once authenticated, OCI A1 and your GPU system are on the same private network.
 
-### Step 5 — Verify connectivity
+### Step 7 — Verify connectivity
 
 From OCI A1, confirm it can reach vLLM on the GPU system (replace with your actual Tailscale IP):
 
@@ -431,7 +461,7 @@ You should get back a JSON response listing the loaded model. If the request tim
 - Both machines show as **Connected** in the Tailscale admin console at [login.tailscale.com](https://login.tailscale.com)
 - Windows Firewall is not blocking port 8000 (add an inbound rule if needed)
 
-### Step 6 — Configure AtlasMind
+### Step 8 — Configure AtlasMind
 
 On OCI A1, set the Tailscale IP before starting the server:
 
