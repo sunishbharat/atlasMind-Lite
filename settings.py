@@ -30,7 +30,7 @@ OLLAMA_REPEAT_PENALTY = float(os.getenv("JQL_OLLAMA_REPEAT_PENALTY", "1.1"))
 # -- vLLM local inference server ---------------------------------------
 # VLLM_MODEL: auto-detected from /v1/models if left empty.
 # VLLM_API_KEY: only needed if vLLM was started with --api-key.
-VLLM_URL         = os.getenv("VLLM_URL",          "http://localhost:8000")
+VLLM_URL         = os.getenv("VLLM_URL",          "http://localhost:8002")
 VLLM_MODEL       = os.getenv("VLLM_MODEL",         "")
 VLLM_TEMPERATURE = float(os.getenv("VLLM_TEMPERATURE", "0.1"))
 VLLM_TIMEOUT     = int(os.getenv("VLLM_TIMEOUT",    "240"))
