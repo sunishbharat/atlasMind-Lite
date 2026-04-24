@@ -407,27 +407,18 @@ wsl --shutdown
 
 ### Step 3 — Configure the Windows firewall
 
-**If you use Norton 360 (or another third-party firewall suite):**
-
-Norton Smart Firewall and Windows Defender Firewall run simultaneously and conflict with each other. Since Norton fully replaces Windows Defender Firewall, disable Windows Defender to avoid the conflict. Run in PowerShell as Administrator:
-
-```powershell
-Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
-```
-
-This is safe — Norton Smart Firewall remains active and provides full firewall protection.
-
-Then add an inbound allow rule in Norton for port 8002:
-
-1. Norton → Settings → Firewall → Traffic Rules → Add
-2. Action: **Allow**, Direction: **Inbound**, Protocol: **TCP**, Local port: **8002**, Profile: **All**
+Add an inbound allow rule for TCP port 8002.
 
 **If you use Windows Defender Firewall only:**
 
-Add an inbound rule via `wf.msc`:
-
 1. Press `Win + R` → type `wf.msc` → Enter
 2. Inbound Rules → New Rule → Port → TCP → 8002 → Allow the connection → All profiles → Finish
+
+**If you use a third-party firewall suite (e.g. Norton 360, McAfee):**
+
+Third-party firewall suites include their own firewall engine that runs alongside Windows Defender Firewall. Add the port 8002 allow rule in your firewall suite's settings — for Norton: Settings → Firewall → Traffic Rules → Add → Action: Allow, Direction: Inbound, Protocol: TCP, Local port: 8002, Profile: All.
+
+> **Note:** If you find that inbound connections are still blocked after adding the rule, check whether both firewalls are active simultaneously. Running two firewall engines at once can cause rule conflicts. Consult your security software's documentation for the recommended configuration when both are present.
 
 ### Step 4 — Restarting vLLM after WSL2 shutdown
 
@@ -488,7 +479,7 @@ You should get back a JSON response listing the loaded model. If the request tim
 - `.wslconfig` has `networkingMode=mirrored` and `firewall=false`, and WSL2 was restarted after the change
 - Both machines show as **Connected** in the Tailscale admin console at [login.tailscale.com](https://login.tailscale.com)
 - The firewall allow rule for port 8002 is in place (Step 3)
-- If using Norton 360: Windows Defender Firewall is disabled (Step 3) — running both simultaneously blocks the connection
+- If using a third-party firewall suite, check whether both firewall engines are conflicting (see Step 3 note)
 
 ### Step 8 — Configure AtlasMind
 
