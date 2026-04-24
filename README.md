@@ -20,7 +20,7 @@ Set the following environment variables (or rely on the defaults in `settings.py
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/jql_vectordb` | pgvector connection string |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | SentenceTransformer model name |
-| `LLM_BACKEND` | `ollama` | LLM backend: `ollama` or `groq` (overrides `--model` when set) |
+| `LLM_BACKEND` | `ollama` | LLM backend: `ollama`, `groq`, or `vllm` (overrides `--model` when set) |
 | `JQL_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `JQL_LOCAL_MODEL` | `qwen2.5:3b-instruct-q4_K_M` | Ollama model to use |
 | `JQL_OLLAMA_TIMEOUT` | `120` | Read timeout in seconds for LLM inference |
@@ -31,6 +31,10 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `MAX_JIRA_RESULTS` | `2000` | Maximum number of Jira issues fetched per query (paginated automatically) |
 | `MAX_INTENT_FIELDS` | `5` | Maximum extra fields the LLM may propose per query |
 | `STANDARD_FIELD_IDS` | `key,summary,assignee,priority,issuetype,created,resolutiondate` | Comma-separated list of Jira field IDs always shown in results — override per project or Docker deployment |
+| `VLLM_URL` | — | vLLM server base URL (e.g. `http://100.x.x.x:8002`) |
+| `VLLM_TIMEOUT` | `240` | Read timeout in seconds for vLLM inference |
+| `VLLM_MAX_TOKENS` | — | Max tokens for vLLM responses |
+| `VLLM_API_KEY` | — | API key if the vLLM server requires authentication |
 
 ## Running the app
 
@@ -41,6 +45,7 @@ All modes are accessed through `app.py`.
 ```bash
 uv run python app.py --query                  # local Ollama (default)
 uv run python app.py --query --model groq     # Groq cloud
+uv run python app.py --query --model vllm     # vLLM inference server
 ```
 
 Starts a Rich terminal loop with the AtlasMind banner. Type a natural language query and press Enter to get JQL and an answer.
@@ -86,8 +91,9 @@ Runs one query, prints `JQL` and `Answer`, then exits. Useful for scripting.
 ### FastAPI server
 
 ```bash
-uv run python app.py --server                          # Ollama backend, port 8000
-uv run python app.py --server --model groq --port 9000 # Groq backend, port 9000
+uv run python app.py --server                           # Ollama backend, port 8000
+uv run python app.py --server --model groq --port 9000  # Groq backend, port 9000
+uv run python app.py --server --model vllm --port 9000  # vLLM backend, port 9000
 ```
 
 Starts the REST API on `http://0.0.0.0:8000`.
@@ -136,7 +142,7 @@ The flag is stripped from the query before it is sent to the LLM, so it does not
   JQL     : project = KAFKA ORDER BY created DESC
 ```
 
-Overrides work across all LLM backends (Ollama and Groq).
+Overrides work across all LLM backends (Ollama, Groq, and vLLM).
 
 ## Architecture
 
@@ -147,7 +153,7 @@ Overrides work across all LLM backends (Ollama and Groq).
 3. At query time, `QueryRouter` makes a single fast LLM call to classify the query:
    - **General query** → answered immediately; no embeddings or Jira API calls
    - **JQL query** → full RAG pipeline: encode → similarity search → prompt → LLM → Jira API
-4. The assembled prompt (system instructions + fields + examples + query) is sent to the active LLM (Ollama or Groq)
+4. The assembled prompt (system instructions + fields + examples + query) is sent to the active LLM (Ollama, Groq, or vLLM)
 5. LLM returns structured JSON with `jql`, `chart_spec`, and `answer`
 6. JQL is post-processed (strip LIMIT, arithmetic ORDER BY), then executed against the Jira REST API
 
@@ -165,6 +171,7 @@ Both seeding steps are hash-gated — re-encoding is skipped if the source files
 | `core/router.py` | Two-stage query router — fast LLM classify before triggering RAG pipeline |
 | `core/ollama_client.py` | Sync `test_connection()` and async `generate_jql()` against the Ollama API |
 | `core/groq_client.py` | Async Groq REST client (OpenAI-compatible); used when `--model=groq` |
+| `core/vllm_client.py` | Async vLLM REST client (OpenAI-compatible); auto-detects model from `/v1/models`; used when `--model=vllm` |
 | `cloud/oci_vault.py` | OCI Vault secret fetching via Instance Principal; fallback to plain env var |
 | `rag/jql_embeddings.py` | Seeds and searches the JQL annotation pgvector table |
 | `rag/jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table |
@@ -299,7 +306,7 @@ vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
   --quantization awq \
   --gpu-memory-utilization 0.85 \
   --max-model-len 8192 \
-  --port 8000 \
+  --port 8002 \
   --host 0.0.0.0
 ```
 
@@ -315,7 +322,7 @@ On first run, this downloads the model weights from HuggingFace (~4.5 GB). Subse
 INFO:     Application startup complete.
 ```
 
-The server is now listening on port 8000.
+The server is now listening on port 8002.
 
 **Alternative models** (all fit in 8 GB VRAM with AWQ):
 
@@ -329,7 +336,7 @@ The server is now listening on port 8000.
 From WSL2, confirm the API responds:
 
 ```bash
-curl http://localhost:8000/v1/models
+curl http://localhost:8002/v1/models
 ```
 
 You should see a JSON response listing the loaded model name.
@@ -339,10 +346,10 @@ You should see a JSON response listing the loaded model name.
 On the OCI A1 machine, set the following environment variables before starting AtlasMind:
 
 ```bash
-export VLLM_URL=http://<katana-tailscale-ip>:8000
+export VLLM_URL=http://<gpu-system-tailscale-ip>:8002
 ```
 
-Replace `<katana-tailscale-ip>` with the GPU system's Tailscale IP address (find it by running `tailscale ip` in WSL2 on the GPU system).
+Replace `<gpu-system-tailscale-ip>` with the GPU system's Tailscale IP address (find it by running `tailscale ip` in PowerShell on the GPU system, or clicking the Tailscale tray icon).
 
 Then start AtlasMind with the vLLM backend:
 
@@ -362,7 +369,7 @@ nohup vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ \
   --quantization awq \
   --gpu-memory-utilization 0.85 \
   --max-model-len 8192 \
-  --port 8000 \
+  --port 8002 \
   --host 0.0.0.0 > ~/vllm.log 2>&1 &
 ```
 
@@ -380,35 +387,56 @@ Download and install Tailscale from [tailscale.com/download](https://tailscale.c
 
 Once signed in, Tailscale assigns your Windows machine a private IP in the `100.x.x.x` range. You will see the Tailscale icon in the system tray.
 
-### Step 2 — Enable WSL2 mirrored networking
+### Step 2 — Configure WSL2 networking
 
-By default, WSL2 runs in its own isolated network. Mirrored networking mode makes WSL2 ports (including vLLM on port 8000) directly accessible via the Windows host's Tailscale IP — no manual port forwarding needed.
-
-Create or edit `C:\Users\<your-username>\.wslconfig` in Notepad:
+Edit (or create) `C:\Users\<username>\.wslconfig` and add:
 
 ```ini
 [wsl2]
 networkingMode=mirrored
+firewall=false
 ```
 
-Save the file, then restart WSL2:
+Restart WSL2 to apply:
 
 ```powershell
 wsl --shutdown
 ```
 
-Reopen Ubuntu. From this point, anything running in WSL2 on port 8000 is reachable on the Windows machine's Tailscale IP.
+`networkingMode=mirrored` makes WSL2 share the Windows network stack directly — vLLM is reachable at the Windows machine's IP without any port proxy. `firewall=false` disables the WSL2 Hyper-V firewall layer, which otherwise blocks inbound connections independently of other firewall rules.
 
-> **Windows version requirement:** Mirrored networking requires Windows 11 22H2 or later and WSL2 version 2.0+. Check your WSL version with `wsl --version`. If mirrored mode is unavailable, see the port forwarding fallback below.
+### Step 3 — Configure the Windows firewall
 
-### Step 3 — Restarting vLLM after WSL2 shutdown
+**If you use Norton 360 (or another third-party firewall suite):**
+
+Norton Smart Firewall and Windows Defender Firewall run simultaneously and conflict with each other. Since Norton fully replaces Windows Defender Firewall, disable Windows Defender to avoid the conflict. Run in PowerShell as Administrator:
+
+```powershell
+Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+```
+
+This is safe — Norton Smart Firewall remains active and provides full firewall protection.
+
+Then add an inbound allow rule in Norton for port 8002:
+
+1. Norton → Settings → Firewall → Traffic Rules → Add
+2. Action: **Allow**, Direction: **Inbound**, Protocol: **TCP**, Local port: **8002**, Profile: **All**
+
+**If you use Windows Defender Firewall only:**
+
+Add an inbound rule via `wf.msc`:
+
+1. Press `Win + R` → type `wf.msc` → Enter
+2. Inbound Rules → New Rule → Port → TCP → 8002 → Allow the connection → All profiles → Finish
+
+### Step 4 — Restarting vLLM after WSL2 shutdown
 
 WSL2 resets completely on every shutdown (`wsl --shutdown`, PC restart, or closing the terminal) — all running processes including vLLM are killed. You must restart vLLM each time WSL2 comes back up.
 
 To make this less tedious, add a shell alias to your `~/.bashrc`:
 
 ```bash
-echo "alias start-vllm='source ~/vllm-env/bin/activate && vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ --quantization awq --gpu-memory-utilization 0.85 --max-model-len 8192 --port 8000 --host 0.0.0.0'" >> ~/.bashrc
+echo "alias start-vllm='source ~/vllm-env/bin/activate && vllm serve Qwen/Qwen2.5-Coder-7B-Instruct-AWQ --quantization awq --gpu-memory-utilization 0.85 --max-model-len 8192 --port 8002 --host 0.0.0.0'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -424,15 +452,15 @@ Or in the background:
 start-vllm > ~/vllm.log 2>&1 &
 ```
 
-### Step 5 — Find your Tailscale IP
+### Step 5 — Find your Tailscale IP (on the GPU system)
 
-In WSL2, run:
+In PowerShell on Windows, run:
 
-```bash
+```powershell
 tailscale ip
 ```
 
-Or on the Windows side, click the Tailscale system tray icon — your IP is shown at the top. It will look like `100.x.x.x`.
+Or click the Tailscale system tray icon — your IP is shown at the top. It will look like `100.x.x.x`.
 
 Note this IP — you will set it as `VLLM_URL` on OCI A1.
 
@@ -452,53 +480,24 @@ Follow the authentication link printed in the terminal to connect OCI A1 to the 
 From OCI A1, confirm it can reach vLLM on the GPU system (replace with your actual Tailscale IP):
 
 ```bash
-curl http://100.x.x.x:8000/v1/models
+curl http://100.x.x.x:8002/v1/models
 ```
 
 You should get back a JSON response listing the loaded model. If the request times out, check that:
 - vLLM is running in WSL2 with `--host 0.0.0.0`
-- WSL2 mirrored networking is active (`wsl --version` shows 2.0+)
+- `.wslconfig` has `networkingMode=mirrored` and `firewall=false`, and WSL2 was restarted after the change
 - Both machines show as **Connected** in the Tailscale admin console at [login.tailscale.com](https://login.tailscale.com)
-- Windows Firewall is not blocking port 8000 (add an inbound rule if needed)
+- The firewall allow rule for port 8002 is in place (Step 3)
+- If using Norton 360: Windows Defender Firewall is disabled (Step 3) — running both simultaneously blocks the connection
 
 ### Step 8 — Configure AtlasMind
 
 On OCI A1, set the Tailscale IP before starting the server:
 
 ```bash
-export VLLM_URL=http://100.x.x.x:8000
+export VLLM_URL=http://100.x.x.x:8002
 uv run python app.py --server --model vllm
 ```
-
----
-
-### Port forwarding fallback (if mirrored networking is unavailable)
-
-If you cannot enable mirrored networking, manually forward port 8000 from Windows to WSL2.
-
-First, find the WSL2 internal IP (run inside WSL2):
-
-```bash
-hostname -I
-```
-
-Note the IP (e.g. `172.x.x.x`). Then run this in PowerShell as Administrator on Windows:
-
-```powershell
-netsh interface portproxy add v4tov4 `
-  listenport=8000 listenaddress=0.0.0.0 `
-  connectport=8000 connectaddress=172.x.x.x
-```
-
-Replace `172.x.x.x` with the WSL2 IP from above. This rule forwards traffic arriving on Windows port 8000 (including via Tailscale) into WSL2 where vLLM is listening.
-
-To remove the rule later:
-
-```powershell
-netsh interface portproxy delete v4tov4 listenport=8000 listenaddress=0.0.0.0
-```
-
-> Note: The WSL2 internal IP changes on each WSL2 restart. Re-run `hostname -I` and update the port proxy rule each time if using this fallback.
 
 ---
 
