@@ -32,8 +32,15 @@ async def lifespan(app: FastAPI):
     config = EmbeddingsConfig(model_name=EMBEDDING_MODEL)
     _atlasmind = AtlasMind(config, llm_backend=_llm_backend)
     _atlasmind.run()
+    if _llm_backend == "groq":
+        _meta_model_name = GROQ_MODEL
+    elif _llm_backend == "vllm":
+        _meta_model_name = _atlasmind.llm_client.model
+    else:
+        _meta_model_name = OLLAMA_MODEL
     _server_meta = ServerMeta(
-        model_name=GROQ_MODEL if _llm_backend == "groq" else OLLAMA_MODEL,
+        model_name=_meta_model_name,
+        llm_backend=_llm_backend,
         llm_timeout=_atlasmind.llm_client.timeout,
     )
     logger.info("Ready.")

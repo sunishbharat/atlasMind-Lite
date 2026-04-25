@@ -10,16 +10,20 @@ A query is about Jira data if ANY of these are true:
 3. It filters by Jira fields: priority, status, assignee, sprint, label, resolution, date range
 4. It asks for charts, graphs, or tables of Jira issue data
 5. It contains multi-step Jira data requests (find X then sort by Y, show Z field in table)
+6. It asks to compare, trend, or analyze Jira issue metrics (e.g., bugs created vs resolved, open vs closed by week, throughput over time)
 
 A query is NOT about Jira data if it:
 - Is a greeting, pleasantry, or social message (hello, hi, how are you, thanks, etc.)
-- Asks for opinions, comparisons, or explanations about tools or general topics
+- Asks for opinions, comparisons, or explanations about non-Jira tools or general topics (e.g., "Jira vs GitHub Issues", "what is agile?")
 - Uses "issues" to mean general problems or challenges, not Jira tickets
 
 Examples:
 - "list open bugs in project X" → JQL
 - "summarize open bugs in kafka that mention crash in the title" → JQL
 - "list 100 issues with major or minor priority for project ZOOKEEPER, hive, hadoop that took longest to close, show resolved date, completion time, create a line chart" → JQL
+- "list 10000 issues in project kafka, zookeeper, hive, hadoop. Compare bugs created vs bugs resolved per week for the past 3 months" → JQL
+- "compare open vs closed tickets by week in project INFRA for the last quarter" → JQL
+- "how many bugs were created vs resolved each sprint in KAFKA?" → JQL
 - "show me tickets assigned to John" → JQL
 - "which epics in sprint 42 are still open?" → JQL
 - “compare Jira to GitHub Issues for a 30-person team” → For a 30-person team, Jira offers the most flexibility but has a steeper learning curve compared to GitHub Issues and Linear...

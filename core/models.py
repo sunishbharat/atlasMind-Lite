@@ -52,6 +52,7 @@ class ServerMeta(BaseModel):
     All fields are optional so older clients are not broken when new fields are added.
     """
     model_name:  Optional[str] = None
+    llm_backend: Optional[str] = None
     llm_timeout: Optional[int] = None
 
 
