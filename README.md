@@ -29,6 +29,7 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
 | `JQL_ANNOTATION_FILE` | `data/jira_jql_annotated_queries.md` | Path to JQL annotation file |
 | `MAX_JIRA_RESULTS` | `2000` | Maximum number of Jira issues fetched per query (paginated automatically) |
+| `JQL_MAX_ATTEMPTS` | `4` | Total JQL attempts per query: 1 initial + (`JQL_MAX_ATTEMPTS` − 1) retries on Jira validation errors |
 | `MAX_INTENT_FIELDS` | `5` | Maximum extra fields the LLM may propose per query |
 | `STANDARD_FIELD_IDS` | `key,summary,assignee,priority,issuetype,created,resolutiondate` | Comma-separated list of Jira field IDs always shown in results — override per project or Docker deployment |
 | `VLLM_URL` | — | vLLM server base URL (e.g. `http://100.x.x.x:8002`) |
@@ -39,6 +40,11 @@ Set the following environment variables (or rely on the defaults in `settings.py
 ## Running the app
 
 All modes are accessed through `app.py`.
+
+> **Setting env variables on Windows**
+> The `VAR=value command` inline syntax is Linux/macOS only. On Windows use:
+> - **CMD:** `set JQL_MAX_ATTEMPTS=5 && uv run python app.py --server`
+> - **PowerShell:** `$env:JQL_MAX_ATTEMPTS=5; uv run python app.py --server`
 
 ### Interactive REPL
 
@@ -155,7 +161,7 @@ Overrides work across all LLM backends (Ollama, Groq, and vLLM).
    - **JQL query** → full RAG pipeline: encode → similarity search → prompt → LLM → Jira API
 4. The assembled prompt (system instructions + fields + examples + query) is sent to the active LLM (Ollama, Groq, or vLLM)
 5. LLM returns structured JSON with `jql`, `chart_spec`, and `answer`
-6. JQL is post-processed (strip LIMIT, arithmetic ORDER BY), then executed against the Jira REST API
+6. JQL is post-processed (strip LIMIT, arithmetic ORDER BY), then executed against the Jira REST API. On validation failure, the Jira error is appended to the prompt and the LLM is asked to correct the JQL — up to `JQL_MAX_ATTEMPTS` total attempts (default 4). When Jira identifies a specific invalid field by name, a targeted prompt instructs the model to remove that exact condition rather than guess a fix.
 
 Both seeding steps are hash-gated — re-encoding is skipped if the source files have not changed since the last run.
 
@@ -219,6 +225,8 @@ class JqlResponse(BaseModel):
 ```
 
 For general (non-Jira) questions, `jql` and `chart_spec` are `None` and `answer` contains the plain-text response.
+
+For JQL queries, `answer` always includes a result-count suffix appended by the server after the Jira search completes — for example `Found 42 result(s).`, `Found 500 result(s); showing 500.` (when paginated), or `No results found.`
 
 ## Data files
 

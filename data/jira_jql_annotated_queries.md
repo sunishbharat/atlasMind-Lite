@@ -1402,3 +1402,12 @@ issuetype = Task AND project in (KAFKA, ZOOKEEPER, FLINK) AND issueFunction in l
 (project in (KAFKA, FLINK)) AND issueFunction in linkedIssuesOf("project in (KAFKA, FLINK)", duplicates) ORDER BY created DESC
 
 
+/* 446. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a direct issue link of any issue type*/
+project in (KAFKA, HIVE, ZOOKEEPER) AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by")
+
+/* 447. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a at least 1 issue type link or linked issues of any type */
+project in (KAFKA, HIVE, ZOOKEEPER) AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by")
+
+/* 448. In project KAFKA, find Epics that have linked Stories, and Stories that in turn have linked Tasks or Sub-tasks. Use this as the base set; build Epic → Story → Task/Sub-task link chains in post-processing. */
+project = KAFKA AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by") and issuetype in (Story, Task, Sub-task, Epic)
+

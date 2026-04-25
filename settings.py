@@ -104,10 +104,24 @@ JQL_RETRY_FIELD_TEMPLATE = (
     "Return corrected JQL in the same JSON format."
 )
 
+# Used when multiple invalid fields are identified in one Jira error response.
+JQL_RETRY_FIELDS_TEMPLATE = (
+    "\n\nRETRY: multiple invalid fields in the JQL.\n"
+    "  Bad JQL : {bad_jql}\n"
+    "  Invalid fields: {fields}\n\n"
+    "Remove ALL conditions containing these fields entirely.\n"
+    "Do not rename or quote them — remove each condition entirely.\n"
+    "Return corrected JQL in the same JSON format."
+)
+
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
 MAX_RESULTS  = 500
 MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "2000"))
+
+# -- JQL retry -----------------------------------------------------------
+# Total attempts per query: 1 initial + (JQL_MAX_ATTEMPTS - 1) retries.
+JQL_MAX_ATTEMPTS = int(os.getenv("JQL_MAX_ATTEMPTS", "4"))
 
 # -- Intent field resolution -------------------------------------------
 # Maximum number of extra fields the LLM may propose per query.
@@ -116,7 +130,7 @@ MAX_INTENT_FIELDS = int(os.getenv("MAX_INTENT_FIELDS", "5"))
 # Desired standard column IDs — always shown in the frontend.
 # Validated against jira_fields.json at startup; missing IDs are logged and dropped.
 # Override via env: STANDARD_FIELD_IDS=key,summary,assignee,status
-_STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,priority,issuetype,created,resolutiondate"
+_STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,status,priority,issuetype,created,resolutiondate"
 STANDARD_FIELD_IDS: list[str] = [
     f.strip() for f in (os.getenv("STANDARD_FIELD_IDS") or _STANDARD_FIELD_IDS_DEFAULT).split(",") if f.strip()
 ]
