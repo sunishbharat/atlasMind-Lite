@@ -418,7 +418,13 @@ Add an inbound allow rule for TCP port 8002.
 
 Third-party firewall suites include their own firewall engine that runs alongside Windows Defender Firewall. Add the port 8002 allow rule in your firewall suite's settings — for Norton: Settings → Firewall → Traffic Rules → Add → Action: Allow, Direction: Inbound, Protocol: TCP, Local port: 8002, Profile: All.
 
-> **Note:** If you find that inbound connections are still blocked after adding the rule, check whether both firewalls are active simultaneously. Running two firewall engines at once can cause rule conflicts. Consult your security software's documentation for the recommended configuration when both are present.
+> **Note:** If inbound connections are still blocked after adding the rule, both firewall engines may be active simultaneously and conflicting. If your third-party suite is the intended firewall, disable Windows Defender Firewall so only one engine is enforcing rules. Run the following in PowerShell as Administrator:
+>
+> ```powershell
+> Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+> ```
+>
+> This disables Windows Defender Firewall across all profiles. Your third-party firewall (Norton, McAfee, etc.) remains active.
 
 ### Step 4 — Restarting vLLM after WSL2 shutdown
 
@@ -441,6 +447,12 @@ Or in the background:
 
 ```bash
 start-vllm > ~/vllm.log 2>&1 &
+```
+
+Then follow the logs:
+
+```bash
+tail -f ~/vllm.log
 ```
 
 ### Step 5 — Find your Tailscale IP (on the GPU system)
