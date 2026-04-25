@@ -108,7 +108,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
             type="general",
             profile=profile_name,
             jira_base_url=jira_base_url,
-            answer=llm_result.answer,
+            answer=llm_result.answer or "No response generated. Please try rephrasing your query.",
             chart_spec=chart_spec,
             meta=_server_meta,
         )
@@ -132,15 +132,27 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
         for r in jira_result.get("raw_issues", [])
     ]
 
+    total = jira_result.get("total", 0)
+    shown = jira_result.get("shown", 0)
+
+    base_answer = llm_result.answer or ""
+    if total == 0:
+        count_note = "No results found."
+    elif shown < total:
+        count_note = f"Found {total} result(s); showing {shown}."
+    else:
+        count_note = f"Found {total} result(s)."
+    answer = f"{base_answer} {count_note}".strip() if base_answer else count_note
+
     return QueryResponse(
         type="jql",
         profile=profile_name,
         jira_base_url=jira_base_url,
-        answer=llm_result.answer,
+        answer=answer,
         jql=jira_result.get("jql"),
-        total=jira_result.get("total", 0),
-        shown=jira_result.get("shown", 0),
-        examined=jira_result.get("shown", 0),
+        total=total,
+        shown=shown,
+        examined=shown,
         display_fields=_build_display_fields(resolved),
         issues=normalised,
         chart_spec=chart_spec,

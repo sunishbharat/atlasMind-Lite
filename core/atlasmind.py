@@ -22,7 +22,9 @@ from settings import (
     CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
     JIRA_FIELDS_FILENAME,
+    JQL_MAX_ATTEMPTS,
     JQL_RETRY_FIELD_TEMPLATE,
+    JQL_RETRY_FIELDS_TEMPLATE,
     JQL_RETRY_TEMPLATE,
     MAX_INTENT_FIELDS,
     MAX_JIRA_RESULTS,
@@ -75,7 +77,8 @@ _JQL_AND_IN_RE = re.compile(
 
 
 _JIRA_ERROR_FIELD_RE = re.compile(
-    r"Field '(\w+)' does not exist"
+    r"Field '([\w.]+)' does not exist"
+    r"|Field '([\w.]+)' is not searchable"
     r"|'(\w+)' is a reserved JQL word",
     re.IGNORECASE,
 )
@@ -115,12 +118,12 @@ def _extract_json_object(raw: str) -> str:
     return raw[start:]
 
 
-def _extract_error_field(error_msg: str) -> str | None:
-    """Return the invalid field name from a Jira error message, or None if not identifiable."""
-    m = _JIRA_ERROR_FIELD_RE.search(error_msg)
-    if m:
-        return next(g for g in m.groups() if g is not None)
-    return None
+def _extract_error_fields(error_msg: str) -> list[str]:
+    """Return all invalid field names found in a Jira error message."""
+    return [
+        next(g for g in m.groups() if g is not None)
+        for m in _JIRA_ERROR_FIELD_RE.finditer(error_msg)
+    ]
 
 
 def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
@@ -552,6 +555,12 @@ class AtlasMind:
         logger.info("*** AI JQL: %s", llm_result.jql)
         logger.info("*** AI answer: %s", llm_result.answer)
 
+        if not llm_result.jql and not llm_result.answer:
+            logger.warning("LLM returned null jql and null answer — returning fallback")
+            return JqlResponse(
+                answer="The model could not generate a response for this query. Try rephrasing or use the /raw flag with explicit JQL."
+            ), None
+
         jira_result = None
         if llm_result.jql:
             clean_jql = self._sanitize_jql(llm_result.jql)
@@ -570,47 +579,54 @@ class AtlasMind:
                 dict.fromkeys((resolved.field_ids or []) + rag_field_ids)
             )
             max_results = _parse_limit(query)
+            current_jql = clean_jql
 
-            try:
-                jira_result = await self._execute_query(
-                    jql=clean_jql,
-                    max_results=max_results,
-                    extra_field_ids=combined_extra or None,
-                )
-            except ValueError as exc:
-                logger.warning("JQL attempt 1 failed — retrying with error context")
-                logger.warning("  Bad JQL : %s", clean_jql)
-                logger.warning("  Error   : %s", exc)
-
-                error_field = _extract_error_field(str(exc))
-                if error_field:
-                    logger.warning("  Bad field: %s — using targeted retry prompt", error_field)
-                    retry_prompt = prompt + JQL_RETRY_FIELD_TEMPLATE.format(
-                        field=error_field,
-                        bad_jql=clean_jql,
-                    )
-                else:
-                    retry_prompt = prompt + JQL_RETRY_TEMPLATE.format(
-                        bad_jql=clean_jql,
-                        error=exc,
-                    )
-                retry_raw = await self.llm_client.generate_jql(retry_prompt)
-                logger.debug("LLM retry raw response: %s", retry_raw)
-
+            for attempt in range(1, JQL_MAX_ATTEMPTS + 1):
                 try:
-                    retry_data = json.loads(_extract_json_object(retry_raw), strict=False)
-                except json.JSONDecodeError as parse_exc:
-                    raise ValueError(f"LLM retry response is not valid JSON: {retry_raw!r}") from parse_exc
+                    jira_result = await self._execute_query(
+                        jql=current_jql,
+                        max_results=max_results,
+                        extra_field_ids=combined_extra or None,
+                    )
+                    break
+                except ValueError as exc:
+                    if attempt == JQL_MAX_ATTEMPTS:
+                        raise
+                    retry_num = attempt
+                    logger.warning("JQL attempt %d failed — retry[%d] with error context", attempt, retry_num)
+                    logger.warning("  retry[%d] Bad JQL : %s", retry_num, current_jql)
+                    logger.warning("  retry[%d] Error   : %s", retry_num, exc)
 
-                llm_result = JqlResponse(**retry_data)
-                clean_jql = self._sanitize_jql(llm_result.jql or "")
-                logger.info("*** AI JQL (retry): %s", clean_jql)
+                    error_fields = _extract_error_fields(str(exc))
+                    if len(error_fields) == 1:
+                        logger.warning("  retry[%d] Bad field: %s — using targeted retry prompt", retry_num, error_fields[0])
+                        retry_prompt = prompt + JQL_RETRY_FIELD_TEMPLATE.format(
+                            field=error_fields[0],
+                            bad_jql=current_jql,
+                        )
+                    elif error_fields:
+                        fields_str = ", ".join(f"'{f}'" for f in error_fields)
+                        logger.warning("  retry[%d] Bad fields: %s — using multi-field retry prompt", retry_num, fields_str)
+                        retry_prompt = prompt + JQL_RETRY_FIELDS_TEMPLATE.format(
+                            fields=fields_str,
+                            bad_jql=current_jql,
+                        )
+                    else:
+                        retry_prompt = prompt + JQL_RETRY_TEMPLATE.format(
+                            bad_jql=current_jql,
+                            error=exc,
+                        )
+                    retry_raw = await self.llm_client.generate_jql(retry_prompt)
+                    logger.debug("retry[%d] LLM raw response: %s", retry_num, retry_raw)
 
-                jira_result = await self._execute_query(
-                    jql=clean_jql,
-                    max_results=max_results,
-                    extra_field_ids=combined_extra or None,
-                )
+                    try:
+                        retry_data = json.loads(_extract_json_object(retry_raw), strict=False)
+                    except json.JSONDecodeError as parse_exc:
+                        raise ValueError(f"LLM retry[{retry_num}] response is not valid JSON: {retry_raw!r}") from parse_exc
+
+                    llm_result = JqlResponse(**retry_data)
+                    current_jql = self._sanitize_jql(llm_result.jql or "")
+                    logger.info("*** AI JQL retry[%d]: %s", retry_num, current_jql)
 
             jira_result["resolved_intent_fields"] = resolved
 
