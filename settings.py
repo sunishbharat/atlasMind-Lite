@@ -18,7 +18,7 @@ LLM_BACKEND = os.getenv("LLM_BACKEND", "ollama")
 OLLAMA_URL         = os.getenv("JQL_OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5:3b-instruct-q4_K_M")
 OLLAMA_TEMPERATURE    = float(os.getenv("JQL_OLLAMA_TEMPERATURE",  "0.1"))
-OLLAMA_TIMEOUT        = int(os.getenv("JQL_OLLAMA_TIMEOUT",        "120"))
+OLLAMA_TIMEOUT        = int(os.getenv("JQL_OLLAMA_TIMEOUT",        "240"))
 OLLAMA_NUM_CTX        = int(os.getenv("JQL_OLLAMA_NUM_CTX",        "2048"))
 OLLAMA_NUM_PREDICT    = int(os.getenv("JQL_OLLAMA_NUM_PREDICT",    "512"))
 OLLAMA_NUM_THREAD     = int(os.getenv("JQL_OLLAMA_NUM_THREAD",     "4"))
@@ -36,6 +36,7 @@ VLLM_TEMPERATURE = float(os.getenv("VLLM_TEMPERATURE", "0.1"))
 VLLM_TIMEOUT     = int(os.getenv("VLLM_TIMEOUT",    "240"))
 VLLM_MAX_TOKENS  = int(os.getenv("VLLM_MAX_TOKENS", "500"))
 VLLM_API_KEY     = os.getenv("VLLM_API_KEY",        "")
+VLLM_FALLBACK    = os.getenv("VLLM_FALLBACK",       "ollama")
 
 # -- Groq cloud LLM ---------------------------------------------------
 # GROQ_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
@@ -116,7 +117,7 @@ JQL_RETRY_FIELDS_TEMPLATE = (
 
 # -- Jira query defaults -----------------------------------------------
 DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
-MAX_RESULTS  = 500
+MAX_RESULTS  = 1000
 MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "2000"))
 
 # -- JQL retry -----------------------------------------------------------
@@ -130,7 +131,7 @@ MAX_INTENT_FIELDS = int(os.getenv("MAX_INTENT_FIELDS", "5"))
 # Desired standard column IDs — always shown in the frontend.
 # Validated against jira_fields.json at startup; missing IDs are logged and dropped.
 # Override via env: STANDARD_FIELD_IDS=key,summary,assignee,status
-_STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,status,priority,issuetype,created,resolutiondate"
+_STANDARD_FIELD_IDS_DEFAULT = "key,summary,assignee,status,priority,issuetype,created,resolutiondate,project,fixVersion"
 STANDARD_FIELD_IDS: list[str] = [
     f.strip() for f in (os.getenv("STANDARD_FIELD_IDS") or _STANDARD_FIELD_IDS_DEFAULT).split(",") if f.strip()
 ]
