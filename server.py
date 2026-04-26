@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 
 from core.atlasmind import AtlasMind, normalize_issue, _FIELD_ID_TO_OUTPUT_KEY
+from core.vllm_client import VllmUnavailable
 from core.field_resolver import ExtraField, ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
@@ -32,15 +33,15 @@ async def lifespan(app: FastAPI):
     config = EmbeddingsConfig(model_name=EMBEDDING_MODEL)
     _atlasmind = AtlasMind(config, llm_backend=_llm_backend)
     _atlasmind.run()
-    if _llm_backend == "groq":
-        _meta_model_name = GROQ_MODEL
-    elif _llm_backend == "vllm":
-        _meta_model_name = _atlasmind.llm_client.model
+    if _atlasmind.llm_backend == "groq":
+        _meta_model_name = f"Groq: {GROQ_MODEL}"
+    elif _atlasmind.llm_backend == "vllm":
+        _meta_model_name = f"vLLM: {_atlasmind.llm_client.model}"
     else:
-        _meta_model_name = OLLAMA_MODEL
+        _meta_model_name = f"Ollama: {OLLAMA_MODEL}"
     _server_meta = ServerMeta(
         model_name=_meta_model_name,
-        llm_backend=_llm_backend,
+        llm_backend=_atlasmind.llm_backend,
         llm_timeout=_atlasmind.llm_client.timeout,
     )
     logger.info("Ready.")
@@ -211,6 +212,9 @@ async def query_get(
     except asyncio.CancelledError:
         logger.info("Query cancelled by client: request_id=%s", request_id)
         return _error_response("Query cancelled.")
+    except VllmUnavailable as exc:
+        logger.error("Query failed — vLLM unavailable: %s", exc)
+        return _error_response("LLM service is temporarily unavailable. Please try again later.")
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc))
@@ -245,6 +249,9 @@ async def query_post(request: QueryRequest):
     except asyncio.CancelledError:
         logger.info("Query cancelled by client: request_id=%s", request.request_id)
         return _error_response("Query cancelled.")
+    except VllmUnavailable as exc:
+        logger.error("Query failed — vLLM unavailable: %s", exc)
+        return _error_response("LLM service is temporarily unavailable. Please try again later.")
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc))

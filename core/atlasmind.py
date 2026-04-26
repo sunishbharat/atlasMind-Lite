@@ -9,7 +9,7 @@ from rag.jira_field_embeddings import Jira_Field_Embeddings
 from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
 from core.groq_client import GroqClient
-from core.vllm_client import VllmClient
+from core.vllm_client import VllmClient, VllmUnavailable
 from core.router import QueryRouter
 from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
@@ -33,6 +33,7 @@ from settings import (
     ROUTER_PROMPT_FILE_OLLAMA,
     STANDARD_FIELD_IDS,
     SYSTEM_PROMPT_FILE,
+    VLLM_FALLBACK,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,11 @@ _JIRA_ERROR_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
+_JIRA_VALUE_ERROR_RE = re.compile(
+    r"The value '([^']+)' does not exist for the field '([\w\[\].]+)'",
+    re.IGNORECASE,
+)
+
 
 def _extract_json_object(raw: str) -> str:
     """Extract the first complete JSON object from raw LLM output.
@@ -124,6 +130,38 @@ def _extract_error_fields(error_msg: str) -> list[str]:
         next(g for g in m.groups() if g is not None)
         for m in _JIRA_ERROR_FIELD_RE.finditer(error_msg)
     ]
+
+
+def _extract_value_errors(error_msg: str) -> list[tuple[str, str]]:
+    """Return (field, value) pairs for 'value does not exist for field' Jira errors."""
+    return [(m.group(2), m.group(1)) for m in _JIRA_VALUE_ERROR_RE.finditer(error_msg)]
+
+
+def _strip_field_conditions(jql: str, fields: list[str]) -> str:
+    """Remove all WHERE conditions involving the given field IDs from JQL.
+
+    Handles both AND-preceded conditions and leading conditions (first in WHERE).
+    """
+    result = jql
+    for field in fields:
+        fp = re.escape(field)
+        # AND-preceded condition (middle or trailing)
+        result = re.sub(
+            rf"\s+AND\s+{fp}\s+(?:NOT\s+IN|IN)\s*\([^)]*\)"
+            rf"|\s+AND\s+{fp}\s*(?:!=|=)\s*(?:'[^']*'|\"[^\"]*\"|\S+)",
+            "",
+            result,
+            flags=re.IGNORECASE,
+        )
+        # Leading condition — strip field+op+value and consume the following AND if present
+        result = re.sub(
+            rf"^{fp}\s+(?:NOT\s+IN|IN)\s*\([^)]*\)\s*(?:AND\s+)?"
+            rf"|^{fp}\s*(?:!=|=)\s*(?:'[^']*'|\"[^\"]*\")\s*(?:AND\s+)?",
+            "",
+            result.strip(),
+            flags=re.IGNORECASE,
+        )
+    return result.strip()
 
 
 def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
@@ -350,24 +388,33 @@ class AtlasMind:
         # {field_id: [allowed_value_strings]} — populated in run() from the vector DB.
         self.allowed_values: dict[str, list[str]] = {}
 
-        if llm_backend == "groq":
-            self.llm_client = GroqClient()
-            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
-        elif llm_backend == "vllm":
-            self.llm_client = VllmClient()
-            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
-        else:
-            self.llm_client = OllamaClient()
-            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE_OLLAMA), two_pass=True)
-        self.chart_spec_generator = ChartSpecGenerator(self.llm_client, Path(CHART_SPEC_PROMPT_FILE))
+        self._init_llm_backend(llm_backend)
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
         self.system_prompt_dir = Path(SYSTEM_PROMPT_FILE)
 
         self.jql_embeddings = JQL_Embeddings(embedconfig, self.document_processor)
         self.jira_field_embeddings = Jira_Field_Embeddings(embedconfig, self.document_processor)
 
+    def _init_llm_backend(self, backend: str) -> None:
+        self.llm_backend = backend
+        if backend == "groq":
+            self.llm_client = GroqClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
+        elif backend == "vllm":
+            self.llm_client = VllmClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
+        else:
+            self.llm_client = OllamaClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE_OLLAMA), two_pass=True)
+        self.chart_spec_generator = ChartSpecGenerator(self.llm_client, Path(CHART_SPEC_PROMPT_FILE))
+
     def run(self) -> None:
-        self.llm_client.test_connection()
+        try:
+            self.llm_client.test_connection()
+        except VllmUnavailable as exc:
+            logger.warning("vLLM unavailable (%s) — falling back to %s", exc, VLLM_FALLBACK)
+            self._init_llm_backend(VLLM_FALLBACK)
+            self.llm_client.test_connection()
         self.jql_embeddings.run(Path(DEFAULT_ANNOTATION_FILE))
 
         profile = load_active_profile()
@@ -417,7 +464,8 @@ class AtlasMind:
             "\n\n"
             "## Available Jira Fields\n"
             "Populate intent_fields using ONLY the display names listed here, copied verbatim.\n"
-            "Do NOT use field IDs (e.g. 'issuetype', 'resolutiondate') — use the display name (e.g. 'Issue Type', 'Resolved').\n"
+            "The display name is the text BEFORE the first colon in each line (e.g. 'Fix Version/s', not 'fixVersion' or 'fixVersions').\n"
+            "Do NOT use JQL clause names or field IDs — only the display name before the colon.\n"
             f"{fields_block}\n\n"
             "## JQL Rules\n"
             "1. Use only field IDs and allowed values listed above — do not invent fields or values.\n"
@@ -597,7 +645,23 @@ class AtlasMind:
                     logger.warning("  retry[%d] Bad JQL : %s", retry_num, current_jql)
                     logger.warning("  retry[%d] Error   : %s", retry_num, exc)
 
-                    error_fields = _extract_error_fields(str(exc))
+                    exc_str = str(exc)
+
+                    # Network errors cannot be fixed by the LLM — fail immediately.
+                    if "Jira connection failed" in exc_str:
+                        raise
+
+                    # Invalid field values: strip offending conditions deterministically,
+                    # no LLM call needed — the LLM has no knowledge of valid allowed values.
+                    value_errors = _extract_value_errors(exc_str)
+                    if value_errors:
+                        for vfield, vval in value_errors:
+                            logger.warning("  retry[%d] Invalid value %r for field %r — stripping condition", retry_num, vval, vfield)
+                        current_jql = _strip_field_conditions(current_jql, [f for f, _ in value_errors])
+                        logger.info("  retry[%d] JQL after value strip: %s", retry_num, current_jql)
+                        continue
+
+                    error_fields = _extract_error_fields(exc_str)
                     if len(error_fields) == 1:
                         logger.warning("  retry[%d] Bad field: %s — using targeted retry prompt", retry_num, error_fields[0])
                         retry_prompt = prompt + JQL_RETRY_FIELD_TEMPLATE.format(
