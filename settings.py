@@ -48,7 +48,7 @@ GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.1"))
 GROQ_TIMEOUT    = int(os.getenv("GROQ_TIMEOUT", "30"))
 GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "500"))
 
-# -- Anthropic Claude cloud LLM ----------------------------------------
+# -- Anthropic Claude direct API ---------------------------------------
 # CLAUDE_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
 # CLAUDE_API_KEY: used as plaintext fallback for local development.
 CLAUDE_API_KEY     = resolve_secret("CLAUDE_API_KEY_OCID", "CLAUDE_API_KEY")
@@ -56,6 +56,17 @@ CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 CLAUDE_TEMPERATURE = float(os.getenv("CLAUDE_TEMPERATURE", "0.1"))
 CLAUDE_TIMEOUT     = int(os.getenv("CLAUDE_TIMEOUT", "30"))
 CLAUDE_MAX_TOKENS  = int(os.getenv("CLAUDE_MAX_TOKENS", "500"))
+
+# -- Anthropic Claude via AWS Bedrock custom gateway --------------------
+# AWS_BEARER_TOKEN_BEDROCK: bearer token for the Bedrock-compatible endpoint.
+# CUSTOM_ENDPOINT: the Bedrock-compatible API gateway URL — must be set explicitly, no default.
+BEDROCK_API_KEY    = os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
+CUSTOM_ENDPOINT    = os.getenv("CUSTOM_ENDPOINT", "")
+BEDROCK_REGION     = os.getenv("BEDROCK_REGION", "custom")
+BEDROCK_MODEL      = os.getenv("BEDROCK_MODEL", "claude-sonnet-4")
+BEDROCK_TEMPERATURE = float(os.getenv("BEDROCK_TEMPERATURE", "0.1"))
+BEDROCK_TIMEOUT    = int(os.getenv("BEDROCK_TIMEOUT", "30"))
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "500"))
 
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")

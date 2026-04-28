@@ -1,11 +1,16 @@
 # Atlasmind-Lite
 
-A natural language to JQL (Jira Query Language) generator using RAG (Retrieval-Augmented Generation) with pgvector and a local Ollama LLM or Groq cloud LLM. Returns structured JSON with a JQL query, a chart specification, and a plain-text answer. A two-stage router answers general questions immediately without touching the JQL pipeline.
+A natural language to JQL (Jira Query Language) generator using RAG (Retrieval-Augmented Generation) with pgvector. Supports multiple LLM backends: local Ollama, vLLM (GPU inference server), Groq cloud, Anthropic Claude direct API, and AWS Bedrock-compatible endpoints. Returns structured JSON with a JQL query, a chart specification, and a plain-text answer. A two-stage router answers general questions immediately without touching the JQL pipeline.
 
 ## Prerequisites
 
 - PostgreSQL with the [`pgvector`](https://github.com/pgvector/pgvector) extension
-- [Ollama](https://ollama.ai) running locally with a model loaded (default: `qwen2.5:3b-instruct-q4_K_M`) — **or** a Groq API key for cloud mode
+- One of the following LLM backends:
+  - [Ollama](https://ollama.ai) running locally with a model loaded (default: `qwen2.5:3b-instruct-q4_K_M`)
+  - A Groq API key (`GROQ_API_KEY`)
+  - A vLLM inference server (`VLLM_URL`)
+  - An Anthropic API key (`CLAUDE_API_KEY`) for Claude direct
+  - An AWS Bedrock-compatible endpoint + bearer token for `--model bedrock`
 - Python 3.12+, [`uv`](https://docs.astral.sh/uv/)
 
 ## Setup
@@ -20,7 +25,7 @@ Set the following environment variables (or rely on the defaults in `settings.py
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/jql_vectordb` | pgvector connection string |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | SentenceTransformer model name |
-| `LLM_BACKEND` | `ollama` | LLM backend: `ollama`, `groq`, or `vllm` (overrides `--model` when set) |
+| `LLM_BACKEND` | `ollama` | LLM backend: `ollama`, `groq`, `vllm`, `claude`, or `bedrock` (overrides `--model` when set) |
 | `JQL_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `JQL_LOCAL_MODEL` | `qwen2.5:3b-instruct-q4_K_M` | Ollama model to use |
 | `JQL_OLLAMA_TIMEOUT` | `120` | Read timeout in seconds for LLM inference |
@@ -36,6 +41,13 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `VLLM_TIMEOUT` | `240` | Read timeout in seconds for vLLM inference |
 | `VLLM_MAX_TOKENS` | — | Max tokens for vLLM responses |
 | `VLLM_API_KEY` | — | API key if the vLLM server requires authentication |
+| `CLAUDE_API_KEY` | — | Anthropic API key (local dev); used when `--model claude` |
+| `CLAUDE_API_KEY_OCID` | — | OCI Vault secret OCID for `CLAUDE_API_KEY` (takes priority) |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Anthropic model name |
+| `AWS_BEARER_TOKEN_BEDROCK` | — | Bearer token for the Bedrock-compatible endpoint; used when `--model bedrock` |
+| `CUSTOM_ENDPOINT` | — | Bedrock-compatible API endpoint URL — required for `--model bedrock` |
+| `BEDROCK_REGION` | `custom` | Region name passed to boto3 (gateway may override internally) |
+| `BEDROCK_MODEL` | `claude-sonnet-4` | Model ID sent to the Bedrock endpoint |
 
 ## Running the app
 
@@ -49,9 +61,11 @@ All modes are accessed through `app.py`.
 ### Interactive REPL
 
 ```bash
-uv run python app.py --query                  # local Ollama (default)
-uv run python app.py --query --model groq     # Groq cloud
-uv run python app.py --query --model vllm     # vLLM inference server
+uv run python app.py --query                    # local Ollama (default)
+uv run python app.py --query --model groq       # Groq cloud
+uv run python app.py --query --model vllm       # vLLM inference server
+uv run python app.py --query --model claude     # Anthropic Claude direct
+uv run python app.py --query --model bedrock    # AWS Bedrock-compatible endpoint
 ```
 
 Starts a Rich terminal loop with the AtlasMind banner. Type a natural language query and press Enter to get JQL and an answer.
@@ -97,9 +111,11 @@ Runs one query, prints `JQL` and `Answer`, then exits. Useful for scripting.
 ### FastAPI server
 
 ```bash
-uv run python app.py --server                           # Ollama backend, port 8000
-uv run python app.py --server --model groq --port 9000  # Groq backend, port 9000
-uv run python app.py --server --model vllm --port 9000  # vLLM backend, port 9000
+uv run python app.py --server                             # Ollama backend, port 8000
+uv run python app.py --server --model groq --port 9000    # Groq backend, port 9000
+uv run python app.py --server --model vllm --port 9000    # vLLM backend, port 9000
+uv run python app.py --server --model claude              # Anthropic Claude direct
+uv run python app.py --server --model bedrock             # AWS Bedrock-compatible endpoint
 ```
 
 Starts the REST API on `http://0.0.0.0:8000`.
@@ -148,7 +164,7 @@ The flag is stripped from the query before it is sent to the LLM, so it does not
   JQL     : project = KAFKA ORDER BY created DESC
 ```
 
-Overrides work across all LLM backends (Ollama, Groq, and vLLM).
+Overrides work across all LLM backends (Ollama, Groq, vLLM, Claude, Bedrock).
 
 ## Architecture
 
@@ -176,8 +192,11 @@ Both seeding steps are hash-gated — re-encoding is skipped if the source files
 | `core/atlasmind.py` | Top-level orchestrator — `run()` seeds both DBs, `generate_jql()` is the query entry point |
 | `core/router.py` | Two-stage query router — fast LLM classify before triggering RAG pipeline |
 | `core/ollama_client.py` | Sync `test_connection()` and async `generate_jql()` against the Ollama API |
-| `core/groq_client.py` | Async Groq REST client (OpenAI-compatible); used when `--model=groq` |
-| `core/vllm_client.py` | Async vLLM REST client (OpenAI-compatible); auto-detects model from `/v1/models`; used when `--model=vllm` |
+| `core/groq_client.py` | Async Groq REST client (OpenAI-compatible); used when `--model groq` |
+| `core/vllm_client.py` | Async vLLM REST client (OpenAI-compatible); auto-detects model from `/v1/models`; used when `--model vllm` |
+| `core/claude_client.py` | Async Anthropic SDK client; used when `--model claude` |
+| `core/bedrock_claude_client.py` | boto3 `converse()` client for Bedrock-compatible endpoints; used when `--model bedrock` |
+| `core/jira_auth.py` | Per-request Jira auth — `X-Jira-Token` and `X-Jira-Url` FastAPI dependencies; `JiraProfile` / `JiraCredential` Pydantic models |
 | `cloud/oci_vault.py` | OCI Vault secret fetching via Instance Principal; fallback to plain env var |
 | `rag/jql_embeddings.py` | Seeds and searches the JQL annotation pgvector table |
 | `rag/jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table |
@@ -212,6 +231,17 @@ Edit `config/profiles.json` to configure your Jira instance:
 ```
 
 Change `"default"` to switch the active instance. Jira fields are auto-fetched and stored in `data/{domain_slug}/` on first run.
+
+### Per-request auth headers
+
+Frontends can override credentials per request using HTTP headers — no server restart needed:
+
+| Header | Description |
+|--------|-------------|
+| `X-Jira-Token` | PAT or API token; takes precedence over the profile `token` field |
+| `X-Jira-Url` | Jira base URL; overrides the profile `jira_url` (must be a valid `http`/`https` URL) |
+
+Both headers are optional. When absent, the active profile values are used as fallback.
 
 ## Response model
 
