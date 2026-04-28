@@ -3,7 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 
 from core.atlasmind import AtlasMind, normalize_issue, _FIELD_ID_TO_OUTPUT_KEY
 from core.vllm_client import VllmUnavailable
@@ -12,7 +12,8 @@ from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
 from core.client_events import ClientEvent, ClientEventType, EventAck
 import core.client_events as client_events
-from config.jira_config import load_active_profile
+from config.jira_config import load_active_jira_profile
+from core.jira_auth import jira_token_dep, jira_url_dep
 from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL
 
 logging.basicConfig(
@@ -93,9 +94,9 @@ def _extract_filters(issues: list[dict]) -> dict[str, list[str]]:
 
 def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
     """Build a uniform QueryResponse from LLM and optional Jira results."""
-    profile = load_active_profile()
-    profile_name = profile.get("name", "default")
-    jira_base_url = profile.get("jira_url", "")
+    profile = load_active_jira_profile()
+    profile_name = profile.name
+    jira_base_url = profile.jira_url
 
     chart_spec = None
     if llm_result.chart_spec:
@@ -164,11 +165,11 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
 
 def _error_response(message: str) -> dict:
     """Return a general-type response carrying an error message for the frontend."""
-    profile = load_active_profile()
+    profile = load_active_jira_profile()
     return QueryResponse(
         type="general",
-        profile=profile.get("name", "default"),
-        jira_base_url=profile.get("jira_url", ""),
+        profile=profile.name,
+        jira_base_url=profile.jira_url,
         answer=f"Error: {message}",
     ).model_dump()
 
@@ -192,6 +193,8 @@ def meta():
 async def query_get(
     q:          str = Query(...,  description="Natural language Jira query"),
     request_id: str = Query(None, description="Client-generated UUID for cancel support"),
+    jira_token: str | None = Depends(jira_token_dep),
+    jira_url:   str | None = Depends(jira_url_dep),
 ):
     """Translate a natural language query to JQL and return Jira issues (GET)."""
     if _atlasmind is None:
@@ -202,7 +205,7 @@ async def query_get(
     if not request_id:
         logger.warning("[cancel] GET /query has no request_id — cancel will not work for this query")
 
-    task = asyncio.create_task(_atlasmind.generate_jql(q))
+    task = asyncio.create_task(_atlasmind.generate_jql(q, jira_token=jira_token, jira_url=jira_url))
     if token:
         token.attach(task)
 
@@ -227,7 +230,11 @@ async def query_get(
 
 
 @app.post("/query")
-async def query_post(request: QueryRequest):
+async def query_post(
+    request: QueryRequest,
+    jira_token: str | None = Depends(jira_token_dep),
+    jira_url:   str | None = Depends(jira_url_dep),
+):
     """Translate a natural language query to JQL and return Jira issues (POST)."""
     if _atlasmind is None:
         raise HTTPException(status_code=503, detail="Model not initialised.")
@@ -239,7 +246,7 @@ async def query_post(request: QueryRequest):
     if not request.request_id:
         logger.warning("[cancel] POST /query has no request_id — cancel will not work for this query")
 
-    task = asyncio.create_task(_atlasmind.generate_jql(request.query))
+    task = asyncio.create_task(_atlasmind.generate_jql(request.query, jira_token=jira_token, jira_url=jira_url))
     if token:
         token.attach(task)
 
