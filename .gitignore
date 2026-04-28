@@ -208,5 +208,8 @@ cython_debug/
 !config/frontend_contract.md
 
 
+# Sample / scratch scripts (local experiments, credentials may be present)
+sample/
+
 # Atlassian credentials
 # profiles.json is tracked — tokens/secrets must remain empty
