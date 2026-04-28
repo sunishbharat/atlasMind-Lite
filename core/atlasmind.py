@@ -3,6 +3,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from document_processor import DocumentProcessor
 from rag.jira_field_embeddings import Jira_Field_Embeddings
@@ -15,7 +16,7 @@ from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
 from core.models import JqlResponse, RouteResult
 from dconfig import EmbeddingsConfig
-from config.jira_config import load_active_profile, get_data_dir, build_jira_auth
+from config.jira_config import get_data_dir, load_active_jira_profile
 from jira.jira_compute import enrich_issue
 from jira.jira_search import JiraSearchClient, JiraSearchRequest
 from settings import (
@@ -417,8 +418,8 @@ class AtlasMind:
             self.llm_client.test_connection()
         self.jql_embeddings.run(Path(DEFAULT_ANNOTATION_FILE))
 
-        profile = load_active_profile()
-        fields_file = get_data_dir(profile["jira_url"]) / JIRA_FIELDS_FILENAME
+        profile = load_active_jira_profile()
+        fields_file = get_data_dir(profile.jira_url) / JIRA_FIELDS_FILENAME
         self.jira_field_embeddings.run(fields_file)
 
         # Build FieldResolver from DB mappings — single query covers both
@@ -491,6 +492,8 @@ class AtlasMind:
         jql: str,
         max_results: int = MAX_RESULTS,
         extra_field_ids: list[str] | None = None,
+        jira_token: str | None = None,
+        jira_url: str | None = None,
     ) -> dict:
         """Execute a JQL query against the active Jira instance with automatic pagination.
 
@@ -498,13 +501,27 @@ class AtlasMind:
             jql: Valid JQL string produced by generate_jql().
             max_results: Maximum number of issues to return (pages automatically if > 1000).
             extra_field_ids: Additional Jira field IDs to request beyond the base set.
+            jira_token: Per-request PAT from X-Jira-Token header. Takes precedence
+                over the profile-configured token.
+            jira_url: Per-request Jira base URL from X-Jira-Url header. Takes precedence
+                over the profile-configured jira_url.
 
         Returns:
             dict with keys: jql, raw_issues, total, shown.
         """
-        profile = load_active_profile()
-        base_url = profile["jira_url"].rstrip("/")
-        auth, auth_headers = build_jira_auth(profile)
+        profile = load_active_jira_profile()
+        if jira_url:
+            parsed = urlparse(jira_url)
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                base_url = jira_url.rstrip("/")
+            else:
+                logger.warning("X-Jira-Url %r is not a valid URL — falling back to profile URL", jira_url)
+                base_url = profile.jira_url
+        else:
+            base_url = profile.jira_url
+        logger.info("Jira base URL: %s (source: %s)", base_url, "header" if jira_url and base_url == jira_url.rstrip("/") else "profile")
+        credential = profile.resolve_auth(token_override=jira_token)
+        auth, auth_headers = credential.auth, credential.headers
 
         all_fields = self.field_resolver.build_fields_param(
             self.standard_field_ids, extra_field_ids
@@ -529,7 +546,7 @@ class AtlasMind:
         )
         return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched}
 
-    async def _handle_raw_query(self, route: RouteResult) -> tuple[JqlResponse, dict]:
+    async def _handle_raw_query(self, route: RouteResult, jira_token: str | None = None, jira_url: str | None = None) -> tuple[JqlResponse, dict]:
         """Execute a user-supplied JQL string directly, bypassing RAG and LLM generation.
 
         Only the LIMIT clause is stripped (unsupported by the Jira REST API).
@@ -556,12 +573,14 @@ class AtlasMind:
         jira_result = await self._execute_query(
             jql=jql,
             max_results=_parse_limit(route.chart_hint or ""),
+            jira_token=jira_token,
+            jira_url=jira_url,
         )
         jira_result["resolved_intent_fields"] = ResolvedIntentFields()
 
         return JqlResponse(jql=jql, chart_spec=chart_spec_dict), jira_result
 
-    async def generate_jql(self, query: str) -> tuple[JqlResponse, dict | None]:
+    async def generate_jql(self, query: str, jira_token: str | None = None, jira_url: str | None = None) -> tuple[JqlResponse, dict | None]:
         """Generate a JQL query (or general answer) from a natural language request.
 
         Stage 1: fast route via QueryRouter — classifies as JQL, general, or raw.
@@ -584,7 +603,7 @@ class AtlasMind:
         route = await self.router.route(query)
 
         if route.is_raw:
-            return await self._handle_raw_query(route)
+            return await self._handle_raw_query(route, jira_token=jira_token, jira_url=jira_url)
 
         if not route.is_jql:
             logger.info("*** AI answer: %s", route.answer)
@@ -635,6 +654,8 @@ class AtlasMind:
                         jql=current_jql,
                         max_results=max_results,
                         extra_field_ids=combined_extra or None,
+                        jira_token=jira_token,
+                        jira_url=jira_url,
                     )
                     break
                 except ValueError as exc:

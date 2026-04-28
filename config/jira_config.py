@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 from settings import DATA_DIR
+from core.jira_auth import JiraProfile
 
 _PROFILES_FILE = Path(__file__).parent / "profiles.json"
 
@@ -71,3 +72,20 @@ def load_active_profile() -> dict:
     default = data["default"]
     profile = data["profiles"][default]
     return {"name": default, **profile}
+
+
+def load_active_jira_profile() -> JiraProfile:
+    """Load and validate the active Jira profile as a JiraProfile model.
+
+    Returns:
+        JiraProfile with validated fields and resolve_auth() available.
+
+    Raises:
+        FileNotFoundError: If profiles.json does not exist.
+        KeyError: If the default profile name is not found in profiles.
+        ValidationError: If the profile fields fail Pydantic validation.
+    """
+    data = json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
+    default = data["default"]
+    profile = data["profiles"][default]
+    return JiraProfile(name=default, **profile)

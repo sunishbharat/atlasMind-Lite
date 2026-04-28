@@ -27,6 +27,7 @@ from core.client_events import (
     _active,
 )
 from core.models import QueryRequest, QueryResponse
+from core.jira_auth import JiraProfile
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,10 @@ def _make_atlasmind_mock(answer: str = "ok") -> MagicMock:
 def _make_server_meta():
     from core.models import ServerMeta
     return ServerMeta(model_name="test-model", llm_timeout=300)
+
+
+def _make_jira_profile() -> JiraProfile:
+    return JiraProfile(name="test", jira_url="http://jira.test", jira_type="server")
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +219,7 @@ def app_client():
     mock_meta = _make_server_meta()
     with patch("server._atlasmind", mock_am), \
          patch("server._server_meta", mock_meta), \
-         patch("server.load_active_profile", return_value={"name": "test", "jira_url": "http://jira.test"}):
+         patch("server.load_active_jira_profile", return_value=_make_jira_profile()):
         with TestClient(app, raise_server_exceptions=False) as client:
             yield client
 
@@ -322,7 +327,7 @@ async def test_cancel_mid_flight_returns_cancelled_response():
 
     cancel_event = asyncio.Event()
 
-    async def slow_generate_jql(query):
+    async def slow_generate_jql(query, jira_token=None, jira_url=None):
         cancel_event.set()          # signal that the query is now in-flight
         await asyncio.sleep(10)     # long enough for cancel to arrive
         return _make_llm_result("should not reach here"), None
@@ -338,7 +343,7 @@ async def test_cancel_mid_flight_returns_cancelled_response():
 
     with patch("server._atlasmind", mock_am), \
          patch("server._server_meta", mock_meta), \
-         patch("server.load_active_profile", return_value={"name": "test", "jira_url": "http://jira.test"}):
+         patch("server.load_active_jira_profile", return_value=_make_jira_profile()):
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -385,7 +390,7 @@ async def test_cancel_after_query_completes_returns_not_accepted():
 
     with patch("server._atlasmind", mock_am), \
          patch("server._server_meta", mock_meta), \
-         patch("server.load_active_profile", return_value={"name": "test", "jira_url": "http://jira.test"}):
+         patch("server.load_active_jira_profile", return_value=_make_jira_profile()):
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -413,7 +418,7 @@ async def test_multiple_concurrent_queries_cancel_independently():
     both_ready = asyncio.Barrier(2)
     results = {}
 
-    async def slow_generate(query):
+    async def slow_generate(query, jira_token=None, jira_url=None):
         await both_ready.wait()     # ensure both tasks are registered before either is cancelled
         await asyncio.sleep(10)
         return _make_llm_result("completed"), None
@@ -427,7 +432,7 @@ async def test_multiple_concurrent_queries_cancel_independently():
 
     with patch("server._atlasmind", mock_am), \
          patch("server._server_meta", mock_meta), \
-         patch("server.load_active_profile", return_value={"name": "test", "jira_url": "http://jira.test"}):
+         patch("server.load_active_jira_profile", return_value=_make_jira_profile()):
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
