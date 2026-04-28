@@ -14,7 +14,7 @@ from core.client_events import ClientEvent, ClientEventType, EventAck
 import core.client_events as client_events
 from config.jira_config import load_active_jira_profile
 from core.jira_auth import jira_token_dep, jira_url_dep
-from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL
+from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL, CLAUDE_MODEL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +38,8 @@ async def lifespan(app: FastAPI):
         _meta_model_name = f"Groq: {GROQ_MODEL}"
     elif _atlasmind.llm_backend == "vllm":
         _meta_model_name = f"vLLM: {_atlasmind.llm_client.model}"
+    elif _atlasmind.llm_backend == "claude":
+        _meta_model_name = f"Claude: {CLAUDE_MODEL}"
     else:
         _meta_model_name = f"Ollama: {OLLAMA_MODEL}"
     _server_meta = ServerMeta(

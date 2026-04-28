@@ -11,6 +11,7 @@ from rag.jql_embeddings import JQL_Embeddings
 from core.ollama_client import OllamaClient
 from core.groq_client import GroqClient
 from core.vllm_client import VllmClient, VllmUnavailable
+from core.claude_client import ClaudeClient
 from core.router import QueryRouter
 from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
@@ -403,6 +404,9 @@ class AtlasMind:
             self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
         elif backend == "vllm":
             self.llm_client = VllmClient()
+            self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
+        elif backend == "claude":
+            self.llm_client = ClaudeClient()
             self.router = QueryRouter(self.llm_client, Path(ROUTER_PROMPT_FILE))
         else:
             self.llm_client = OllamaClient()

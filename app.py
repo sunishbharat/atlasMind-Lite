@@ -34,7 +34,7 @@ from rich.rule import Rule
 from core.atlasmind import AtlasMind
 from core.field_resolver import ResolvedIntentFields
 from dconfig import EmbeddingsConfig
-from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL, VLLM_MODEL, VLLM_URL
+from settings import EMBEDDING_MODEL, OLLAMA_MODEL, GROQ_MODEL, VLLM_MODEL, VLLM_URL, CLAUDE_MODEL
 
 console = Console()
 
@@ -71,6 +71,8 @@ def _print_banner(llm_backend: str = "ollama") -> None:
         llm_model = GROQ_MODEL
     elif llm_backend == "vllm":
         llm_model = VLLM_MODEL or "(auto-detected)"
+    elif llm_backend == "claude":
+        llm_model = CLAUDE_MODEL
     else:
         llm_model = OLLAMA_MODEL
     console.print(BORDER_UP)
@@ -255,10 +257,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        choices=["ollama", "groq", "vllm"],
+        choices=["ollama", "groq", "vllm", "claude"],
         default="ollama",
         metavar="BACKEND",
-        help="LLM backend: 'ollama' (local, default), 'vllm' (local high-throughput), or 'groq' (cloud)",
+        help="LLM backend: 'ollama' (local, default), 'vllm' (local high-throughput), 'groq' (cloud), or 'claude' (Anthropic cloud)",
     )
     parser.add_argument(
         "--host",
