@@ -12,6 +12,13 @@ from settings import (
 
 logger = logging.getLogger(__name__)
 
+# Marks the boundary between the stable system prompt and the dynamic RAG context.
+# Everything before this marker is sent as the cached `system` block; everything
+# after (field descriptions, JQL examples, user query) is the dynamic user message.
+# Router and general-answer prompts don't contain this marker, so they are sent
+# as a single user message without caching.
+_CACHE_SPLIT_MARKER = "\n\n## Available Jira Fields"
+
 
 class BedrockUnavailable(Exception):
     pass
@@ -47,12 +54,29 @@ class BedrockClaudeClient:
 
         logger.info("Bedrock generating response using model: %s", self.model)
 
+        split_idx = prompt.find(_CACHE_SPLIT_MARKER)
+        if split_idx != -1:
+            system_text = prompt[:split_idx]
+            user_text = prompt[split_idx:]
+            logger.debug("Bedrock prompt caching active — system: %d chars, user: %d chars",
+                         len(system_text), len(user_text))
+        else:
+            system_text = None
+            user_text = prompt
+
         def _call() -> str:
             client = self._boto_client()
-            response = client.converse(
+            kwargs: dict = dict(
                 modelId=self.model,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                messages=[{"role": "user", "content": [{"text": user_text}]}],
+                inferenceConfig={
+                    "temperature": self.temperature,
+                    "maxTokens": self.max_tokens,
+                },
             )
+            if system_text:
+                kwargs["system"] = [{"text": system_text, "cacheConfig": {"type": "default"}}]
+            response = client.converse(**kwargs)
             return response["output"]["message"]["content"][0]["text"]
 
         try:

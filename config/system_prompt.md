@@ -8,6 +8,7 @@ JQL rules:
 - The ORDER BY field MUST be a field ID from the ## Available Jira Fields section. NEVER use issueFunction or any other name not listed there.
 - If the user mentions a specific issue key (e.g. KAFKA-20404), use: issue = <KEY>
 - Do not use LIMIT — result count is controlled externally.
+- Multi-word values in IN (...) clauses MUST be quoted: issuetype in ("Requirements Change Request", "Design Change") — never issuetype in (Requirements Change Request).
 - Do not use date arithmetic between two fields (e.g. resolutiondate - created).
 - ORDER BY MUST appear exactly once, at the very end of the JQL — after ALL WHERE conditions. Never place ORDER BY in the middle of a query or before additional AND/OR conditions.
 - Always end with ORDER BY unless the user specifies otherwise.

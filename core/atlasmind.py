@@ -43,14 +43,17 @@ logger = logging.getLogger(__name__)
 
 # Requires a qualifying keyword before OR after the number to avoid matching
 # sprint IDs, issue keys, and other bare numbers (e.g. "sprint 224").
+# Negative lookahead excludes time quantities ("last 20 days", "first 7 weeks").
 # Groups: (prefix-qualified N) | (suffix-qualified N)
 _LIMIT_RE = re.compile(
-    r"\b(?:top|first|last|limit|show|list|get|fetch)\s+(\d+)\b"
+    r"\b(?:top|first|last|limit|show|list|get|fetch)\s+(\d+)\b(?!\s+(?:days?|weeks?|months?|years?|hours?|minutes?))"
     r"|\b(\d+)\s+(?:issues?|tickets?|results?|items?)\b",
     re.IGNORECASE,
 )
 # Strip quotes from purely-numeric values in JQL (e.g. Sprint in ('224') → Sprint in (224)).
 _JQL_QUOTED_NUMBER_RE = re.compile(r"""(['"])(\d+)\1""")
+# Matches IN (...) and NOT IN (...) clauses for multi-word value quoting.
+_JQL_IN_CLAUSE_RE = re.compile(r"((?:NOT\s+)?IN)\s*\(([^)]*)\)", re.IGNORECASE)
 _JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+", re.IGNORECASE)
 _JQL_ARITHMETIC_ORDER_RE = re.compile(r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE)
 # Matches field-to-field date arithmetic in WHERE conditions, e.g.
@@ -236,6 +239,27 @@ def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
     result = _JQL_AND_EQUALITY_RE.sub(_check_equality, jql)
     result = _JQL_AND_IN_RE.sub(_check_in, result)
     return result.strip()
+
+
+def _quote_multiword_in_values(jql: str) -> str:
+    """Quote unquoted multi-word values inside IN (...) clauses.
+
+    Jira JQL requires values containing spaces to be quoted.
+    e.g. issuetype in (Requirements Change Request) → issuetype in ("Requirements Change Request")
+    """
+    def _fix(m: re.Match) -> str:
+        in_kw = m.group(1)
+        parts = [p.strip() for p in m.group(2).split(",") if p.strip()]
+        fixed = []
+        for p in parts:
+            if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+                fixed.append(p)
+            elif " " in p:
+                fixed.append(f'"{p}"')
+            else:
+                fixed.append(p)
+        return f"{in_kw} ({', '.join(fixed)})"
+    return _JQL_IN_CLAUSE_RE.sub(_fix, jql)
 
 
 def _parse_limit(query: str) -> int:
@@ -727,8 +751,11 @@ class AtlasMind:
 
     def _sanitize_jql(self, jql: str) -> str:
         """Apply all deterministic JQL cleanup passes in order."""
-        clean = _JQL_LIMIT_RE.sub("", jql).strip()
-        if clean != jql:
+        quoted = _quote_multiword_in_values(jql)
+        if quoted != jql:
+            logger.info("JQL after multi-word value quoting: %s", quoted)
+        clean = _JQL_LIMIT_RE.sub("", quoted).strip()
+        if clean != quoted:
             logger.info("JQL after LIMIT strip: %s", clean)
 
         stripped = _JQL_ARITHMETIC_ORDER_RE.sub("", clean).strip()
