@@ -517,7 +517,16 @@ class AtlasMind:
             f"{query}\n"
         )
 
-        return system_prompt + context, rag_field_ids
+        full_prompt = system_prompt + context
+        logger.info(
+            "Prompt sizes — system: %d chars (~%d tokens), fields_block: %d chars (~%d tokens), "
+            "examples_block: %d chars (~%d tokens), total: %d chars (~%d tokens)",
+            len(system_prompt), len(system_prompt) // 4,
+            len(fields_block), len(fields_block) // 4,
+            len(examples_block), len(examples_block) // 4,
+            len(full_prompt), len(full_prompt) // 4,
+        )
+        return full_prompt, rag_field_ids
 
     async def _execute_query(
         self,
