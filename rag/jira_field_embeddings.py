@@ -20,7 +20,7 @@ from sentence_transformers import SentenceTransformer
 from settings import (
     DATABASE_URL, EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE,
     JIRA_FIELD_TABLE, JIRA_FIELD_COL_DESCRIPTION, JIRA_FIELD_COL_EMBEDDING, JIRA_FIELD_SEARCH_LIMIT,
-    JIRA_FIELD_IGNORE_IDS,
+    JIRA_FIELD_IGNORE_IDS, MAX_ALLOWED_VALUES_IN_DESC,
 )
 from rag.seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
 from jira.jira_field_api import fetch_and_save_fields, fetch_and_save_allowed_values
@@ -353,7 +353,13 @@ class Jira_Field_Embeddings:
         parts = [f"{name}: a {custom_label} field of type {field_type}."]
 
         if allowed_values:
-            parts.append(f"Allowed values: {', '.join(allowed_values)}.")
+            capped = allowed_values[:MAX_ALLOWED_VALUES_IN_DESC]
+            suffix = (
+                f" (+{len(allowed_values) - MAX_ALLOWED_VALUES_IN_DESC} more)"
+                if len(allowed_values) > MAX_ALLOWED_VALUES_IN_DESC
+                else ""
+            )
+            parts.append(f"Allowed values: {', '.join(capped)}{suffix}.")
 
         parts.append(f"Used in JQL as {clause_str}.")
         parts.append(f"Field ID: {field_id}.")

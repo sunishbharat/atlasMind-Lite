@@ -488,7 +488,10 @@ class AtlasMind:
 
         system_prompt = self.system_prompt_dir.read_text(encoding="utf-8")
 
-        fields_block = "\n".join(f"  - {row[5]}" for row in jira_fields)
+        # Cap each field description to prevent token bloat from fields with
+        # hundreds of allowed values (e.g. version fields in large projects).
+        _MAX_DESC = 500
+        fields_block = "\n".join(f"  - {row[5][:_MAX_DESC]}" for row in jira_fields)
         examples_block = "\n\n".join(
             f"  -- {row[1]}\n  {row[2]}" for row in jql_examples
         )
