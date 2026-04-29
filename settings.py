@@ -86,6 +86,12 @@ JIRA_FIELD_COL_DESCRIPTION   = "description"
 JIRA_FIELD_COL_EMBEDDING     = "embedding"
 JIRA_FIELD_SEARCH_LIMIT      = 5
 
+# Maximum number of allowed values to embed per field description.
+# Fields like version or status can have hundreds of values — including all of them
+# inflates the RAG prompt massively. The full list is stored separately in the
+# allowed_values column for JQL validation; this cap only affects the LLM context.
+MAX_ALLOWED_VALUES_IN_DESC   = int(os.getenv("MAX_ALLOWED_VALUES_IN_DESC", "20"))
+
 # Field IDs to exclude from embedding regardless of type.
 # Add custom fields that are internal, deprecated, or irrelevant to JQL queries.
 JIRA_FIELD_IGNORE_IDS: set[str] = {}
