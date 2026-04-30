@@ -86,6 +86,17 @@ JIRA_FIELD_COL_DESCRIPTION   = "description"
 JIRA_FIELD_COL_EMBEDDING     = "embedding"
 JIRA_FIELD_SEARCH_LIMIT      = 5
 
+# -- Jira field value embeddings (one row per allowed value per field) ----------------
+JIRA_FIELD_VALUES_TABLE         = "jira_field_values"
+JIRA_FIELD_VALUES_COL_EMBEDDING = "embedding"
+# L2 distance threshold below which a single candidate is auto-corrected without LLM.
+VALUE_AUTO_CORRECT_THRESHOLD    = float(os.getenv("VALUE_AUTO_CORRECT_THRESHOLD", "0.15"))
+# L2 distance threshold below which candidates are emitted as LLM retry hints.
+VALUE_HINT_THRESHOLD            = float(os.getenv("VALUE_HINT_THRESHOLD", "0.40"))
+VALUE_HINT_MAX_CANDIDATES       = int(os.getenv("VALUE_HINT_MAX_CANDIDATES", "3"))
+# Top-N query-relevant values injected into the RAG prompt before LLM generation.
+VALUE_PROMPT_MAX_CANDIDATES     = int(os.getenv("VALUE_PROMPT_MAX_CANDIDATES", "3"))
+
 # Maximum number of allowed values to embed per field description.
 # Fields like version or status can have hundreds of values — including all of them
 # inflates the RAG prompt massively. The full list is stored separately in the
@@ -139,6 +150,15 @@ JQL_RETRY_FIELDS_TEMPLATE = (
     "Remove ALL conditions containing these fields entirely.\n"
     "Do not rename or quote them — remove each condition entirely.\n"
     "Return corrected JQL in the same JSON format."
+)
+
+# Appended to any retry prompt when the sanitizer detected invalid values
+# and found close candidates via cosine similarity. Bounded to top-N candidates
+# so token cost is always small regardless of field size.
+JQL_RETRY_VALUE_HINTS_TEMPLATE = (
+    "\n\nVALUE CORRECTIONS NEEDED:\n"
+    "{hints}\n"
+    "Rewrite the JQL using one of the valid values shown above for each field."
 )
 
 # -- Jira query defaults -----------------------------------------------

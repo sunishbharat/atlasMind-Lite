@@ -309,6 +309,54 @@ class Jira_Field_Embeddings:
 
         return rows, model
 
+    def find_similar_field_name(
+        self,
+        name: str,
+        model: SentenceTransformer,
+        distance_threshold: float = 0.7,
+    ) -> tuple[str, str] | None:
+        """Find the closest known Jira field for an unrecognised field name.
+
+        Encodes name with the same model used at seeding time and runs a
+        cosine similarity search against jira_field_embeddings. Returns
+        (field_id, canonical_name) of the best match, or None if the
+        closest result exceeds distance_threshold.
+
+        Args:
+            name:               Unknown field name proposed by the LLM.
+            model:              SentenceTransformer — must match the seeding model.
+            distance_threshold: Reject matches with distance above this value.
+
+        Returns:
+            (field_id, canonical_name) or None.
+        """
+        embedding = model.encode(name, normalize_embeddings=True)
+        sql = f"""
+            SELECT field_id, field_name,
+                   {JIRA_FIELD_COL_EMBEDDING} <-> %s::vector AS distance
+            FROM {JIRA_FIELD_TABLE}
+            ORDER BY distance
+            LIMIT 1;
+        """
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(sql, (embedding.tolist(),))
+                row = cur.fetchone()
+
+        if row is None:
+            return None
+        field_id, field_name, distance = row
+        if distance > distance_threshold:
+            logger.info(
+                "find_similar_field_name: %r closest match %r (dist=%.3f) above threshold %.1f — skipped",
+                name, field_name, distance, distance_threshold,
+            )
+            return None
+        logger.info(
+            "find_similar_field_name: %r → %r (field_id=%r, dist=%.3f)",
+            name, field_name, field_id, distance,
+        )
+        return field_id, field_name
 
     @staticmethod
     def _build_description(

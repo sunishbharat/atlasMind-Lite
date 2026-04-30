@@ -8,7 +8,10 @@ JQL rules:
 - The ORDER BY field MUST be a field ID from the ## Available Jira Fields section. NEVER use issueFunction or any other name not listed there.
 - If the user mentions a specific issue key (e.g. KAFKA-20404), use: issue = <KEY>
 - Do not use LIMIT — result count is controlled externally.
-- Multi-word values in IN (...) clauses MUST be quoted: issuetype in ("Requirements Change Request", "Design Change") — never issuetype in (Requirements Change Request).
+- Multi-word field names MUST be wrapped in double quotes: "Customer Projects" in (newtoni) — never Customer Projects in (newtoni).
+- String values in JQL MUST use single quotes — never double quotes: status IN ('Done', 'In Progress'), issuetype = 'Story', issuetype in ('Requirements Change Request', 'Design Change'). Double quotes inside a JSON string break the response format.
+- Allowed values lists may be truncated with '...'. Use ONLY values explicitly shown — do not invent or guess values from the truncated tail.
+- `comment IS EMPTY` and `comment IS NOT EMPTY` are not valid JQL. To find issues that have at least one comment, use: comment ~ '.'  There is no JQL way to find issues with zero comments.
 - Do not use date arithmetic between two fields (e.g. resolutiondate - created).
 - ORDER BY MUST appear exactly once, at the very end of the JQL — after ALL WHERE conditions. Never place ORDER BY in the middle of a query or before additional AND/OR conditions.
 - Always end with ORDER BY unless the user specifies otherwise.
