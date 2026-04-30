@@ -13,6 +13,7 @@ Classes:
 import json
 import logging
 from pathlib import Path
+from typing import Callable
 
 from pydantic import BaseModel
 
@@ -63,6 +64,7 @@ class FieldResolver:
         self._max = max_intent_fields
         self._name_to_id: dict[str, str] = {}       # normalized name → field_id
         self._id_to_name: dict[str, str] = {}       # field_id → canonical display name
+        self._fuzzy_field_fn: Callable[[str], tuple[str, str] | None] | None = None
         self._build(jira_fields)
 
     @classmethod
@@ -77,6 +79,7 @@ class FieldResolver:
         name_to_id: dict[str, str],
         id_to_name: dict[str, str],
         max_intent_fields: int = 5,
+        fuzzy_field_fn: Callable[[str], tuple[str, str] | None] | None = None,
     ) -> "FieldResolver":
         """Construct a FieldResolver from mappings fetched directly from the vector DB.
 
@@ -85,14 +88,18 @@ class FieldResolver:
         resolution and field ID validation.
 
         Args:
-            name_to_id: {field_name.strip().lower(): field_id} from the DB.
-            id_to_name: {field_id: canonical_field_name} from the DB.
+            name_to_id:       {field_name.strip().lower(): field_id} from the DB.
+            id_to_name:       {field_id: canonical_field_name} from the DB.
             max_intent_fields: Maximum number of intent fields the LLM may propose.
+            fuzzy_field_fn:   Optional callable(name) -> (field_id, canonical_name) | None.
+                              Called when exact name lookup fails — uses embedding similarity
+                              to recover from LLM name variants (e.g. "fixVersion" → "Fix Version/s").
         """
         instance = cls.__new__(cls)
         instance._max = max_intent_fields
         instance._name_to_id = name_to_id
         instance._id_to_name = id_to_name
+        instance._fuzzy_field_fn = fuzzy_field_fn
         logger.info(
             "FieldResolver: %d field names loaded from vector DB", len(name_to_id)
         )
@@ -161,6 +168,18 @@ class FieldResolver:
                     key, self._id_to_name[key],
                 )
                 fid = key
+            if not fid and self._fuzzy_field_fn:
+                # Exact lookup failed — try embedding similarity as fallback.
+                logger.info("intent_field %r not found — attempting fuzzy field lookup", name)
+                match = self._fuzzy_field_fn(key)
+                if match:
+                    fid, canonical = match
+                    logger.warning(
+                        "intent_field %r not found — fuzzy-matched to %r (field_id=%r)",
+                        name, canonical, fid,
+                    )
+                else:
+                    logger.info("intent_field %r fuzzy lookup returned no match within threshold", name)
             if fid:
                 field_ids.append(fid)
                 display_names.append(self._id_to_name[fid])

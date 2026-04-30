@@ -45,6 +45,15 @@ class ChartSpec(BaseModel):
         return _ALIASES.get(str(v).lower(), v)
 
 
+class TokenUsage(BaseModel):
+    """Estimated prompt token counts for a single JQL query."""
+    system_tokens:   int = 0
+    fields_tokens:   int = 0
+    examples_tokens: int = 0
+    total_tokens:    int = 0
+    retry_tokens:    int = 0  # accumulated tokens added across all retry extensions
+
+
 class ServerMeta(BaseModel):
     """Metadata about the server configuration sent to the frontend with every response.
 
@@ -78,6 +87,7 @@ class QueryResponse(BaseModel):
     chart_spec:     Optional[ChartSpec]        = None
     filters:        Optional[dict[str, list[str]]] = None
     meta:           Optional[ServerMeta]       = None
+    token_usage:    Optional[TokenUsage]       = None
 
 
 class ApiResponse(BaseModel):

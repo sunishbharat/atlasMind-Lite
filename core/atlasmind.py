@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -16,19 +17,23 @@ from core.bedrock_claude_client import BedrockClaudeClient
 from core.router import QueryRouter
 from core.chart_spec_generator import ChartSpecGenerator
 from core.field_resolver import ExtraField, FieldResolver, ResolvedIntentFields
-from core.models import JqlResponse, RouteResult
+from core.jql_sanitizer import JqlSanitizer, SanitizeResult
+from core.models import JqlResponse, RouteResult, TokenUsage
 from dconfig import EmbeddingsConfig
 from config.jira_config import get_data_dir, load_active_jira_profile
 from jira.jira_compute import enrich_issue
 from jira.jira_search import JiraSearchClient, JiraSearchRequest
+from rag.jira_field_value_embeddings import JiraFieldValueEmbeddings
 from settings import (
     CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
+    JIRA_ALLOWED_VALUES_FILENAME,
     JIRA_FIELDS_FILENAME,
     JQL_MAX_ATTEMPTS,
     JQL_RETRY_FIELD_TEMPLATE,
     JQL_RETRY_FIELDS_TEMPLATE,
     JQL_RETRY_TEMPLATE,
+    JQL_RETRY_VALUE_HINTS_TEMPLATE,
     MAX_INTENT_FIELDS,
     MAX_JIRA_RESULTS,
     MAX_RESULTS,
@@ -47,40 +52,11 @@ logger = logging.getLogger(__name__)
 # Groups: (prefix-qualified N) | (suffix-qualified N)
 _LIMIT_RE = re.compile(
     r"\b(?:top|first|last|limit|show|list|get|fetch)\s+(\d+)\b(?!\s+(?:days?|weeks?|months?|years?|hours?|minutes?))"
-    r"|\b(\d+)\s+(?:issues?|tickets?|results?|items?)\b",
+    r"|\b(\d+)\s*(?:issues?|tickets?|results?|items?)\b",
     re.IGNORECASE,
 )
-# Strip quotes from purely-numeric values in JQL (e.g. Sprint in ('224') → Sprint in (224)).
-_JQL_QUOTED_NUMBER_RE = re.compile(r"""(['"])(\d+)\1""")
-# Matches IN (...) and NOT IN (...) clauses for multi-word value quoting.
-_JQL_IN_CLAUSE_RE = re.compile(r"((?:NOT\s+)?IN)\s*\(([^)]*)\)", re.IGNORECASE)
+# Used in _handle_raw_query to strip LIMIT before direct JQL execution.
 _JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+", re.IGNORECASE)
-_JQL_ARITHMETIC_ORDER_RE = re.compile(r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE)
-# Matches field-to-field date arithmetic in WHERE conditions, e.g.
-#   AND resolutiondate > created + 20d
-#   AND created + 5w < resolutiondate
-# Does NOT match valid relative dates like: AND created > -20d (right side starts with -)
-_JQL_FIELD_ARITH_COND_RE = re.compile(
-    r"\s+AND\s+"
-    r"(?:"
-    r"\w+\s*(?:>=?|<=?|!=?)\s*[a-zA-Z]\w*\s*[-+]\s*\d+[a-zA-Z]+"   # field op field+Nd
-    r"|"
-    r"\w+\s*[-+]\s*\d+[a-zA-Z]+\s*(?:>=?|<=?|!=?)\s*\w+"            # field+Nd op field
-    r"|"
-    r"\w+\s*[-+]\s*\w+\s*(?:>=?|<=?|!=?)\s*\d+[a-zA-Z]+"            # field-field op Nd
-    r")",
-    re.IGNORECASE,
-)
-# Matches AND field = 'value' or AND field != 'value' with quoted values.
-_JQL_AND_EQUALITY_RE = re.compile(
-    r"""\s+AND\s+([\w\[\]]+)\s*(!=|=)\s*['"]([^'"]+)['"]""",
-    re.IGNORECASE,
-)
-# Matches AND field IN (...) or AND field NOT IN (...) with quoted values.
-_JQL_AND_IN_RE = re.compile(
-    r"""\s+AND\s+([\w\[\]]+)\s+(NOT\s+IN|IN)\s*\(([\s\S]*?)\)""",
-    re.IGNORECASE,
-)
 
 
 _JIRA_ERROR_FIELD_RE = re.compile(
@@ -92,6 +68,16 @@ _JIRA_ERROR_FIELD_RE = re.compile(
 
 _JIRA_VALUE_ERROR_RE = re.compile(
     r"The value '([^']+)' does not exist for the field '([\w\[\].]+)'",
+    re.IGNORECASE,
+)
+
+_JIRA_UNSUPPORTED_OP_RE = re.compile(
+    r"The field '([\w.]+)' does not support searching for (?:EMPTY values|an empty string)",
+    re.IGNORECASE,
+)
+
+_JIRA_UNSUPPORTED_OPERATOR_RE = re.compile(
+    r"The operator '[^']+' is not supported by the '([\w.]+)' field",
     re.IGNORECASE,
 )
 
@@ -130,6 +116,28 @@ def _extract_json_object(raw: str) -> str:
     return raw[start:]
 
 
+_JQL_VALUE_DQUOTE_RE = re.compile(
+    r'("jql"\s*:\s*")(.*?)("(?:\s*,\s*"(?:chart_spec|answer|intent_fields)"|}))',
+    re.DOTALL,
+)
+
+
+def _repair_jql_quotes(raw: str) -> str:
+    """Replace unescaped double quotes inside the jql value with single quotes.
+
+    Small models sometimes emit  status IN ("Done")  instead of  status IN ('Done'),
+    which breaks the JSON wrapper. This replaces bare " inside the jql string value
+    with ' so json.loads can succeed.
+    """
+    def _fix_value(m: re.Match) -> str:
+        prefix, jql_body, suffix = m.group(1), m.group(2), m.group(3)
+        fixed = jql_body.replace('\\"', '\x00').replace('"', "'").replace('\x00', '\\"')
+        return prefix + fixed + suffix
+
+    repaired = _JQL_VALUE_DQUOTE_RE.sub(_fix_value, raw, count=1)
+    return repaired
+
+
 def _extract_error_fields(error_msg: str) -> list[str]:
     """Return all invalid field names found in a Jira error message."""
     return [
@@ -141,6 +149,16 @@ def _extract_error_fields(error_msg: str) -> list[str]:
 def _extract_value_errors(error_msg: str) -> list[tuple[str, str]]:
     """Return (field, value) pairs for 'value does not exist for field' Jira errors."""
     return [(m.group(2), m.group(1)) for m in _JIRA_VALUE_ERROR_RE.finditer(error_msg)]
+
+
+def _extract_unsupported_op_fields(error_msg: str) -> list[str]:
+    """Return field names from 'does not support searching for EMPTY/empty string' errors."""
+    return [m.group(1) for m in _JIRA_UNSUPPORTED_OP_RE.finditer(error_msg)]
+
+
+def _extract_unsupported_operator_fields(error_msg: str) -> list[str]:
+    """Return field names from 'operator X is not supported by field Y' errors."""
+    return [m.group(1) for m in _JIRA_UNSUPPORTED_OPERATOR_RE.finditer(error_msg)]
 
 
 def _strip_field_conditions(jql: str, fields: list[str]) -> str:
@@ -162,7 +180,7 @@ def _strip_field_conditions(jql: str, fields: list[str]) -> str:
         # Leading condition — strip field+op+value and consume the following AND if present
         result = re.sub(
             rf"^{fp}\s+(?:NOT\s+IN|IN)\s*\([^)]*\)\s*(?:AND\s+)?"
-            rf"|^{fp}\s*(?:!=|=)\s*(?:'[^']*'|\"[^\"]*\")\s*(?:AND\s+)?",
+            rf"|^{fp}\s*(?:!=|=)\s*(?:'[^']*'|\"[^\"]*\"|\S+)\s*(?:AND\s+)?",
             "",
             result.strip(),
             flags=re.IGNORECASE,
@@ -170,96 +188,26 @@ def _strip_field_conditions(jql: str, fields: list[str]) -> str:
     return result.strip()
 
 
-def _validate_jql_values(jql: str, allowed: dict[str, list[str]]) -> str:
-    """Strip JQL conditions that reference values not in a field's allowed set.
 
-    Only fields present in ``allowed`` are validated — fields without discrete
-    options (dates, free-text, numbers) are passed through unchanged.
 
-    Handles:
-    - ``AND field = 'value'``   — strip entire condition if value is invalid
-    - ``AND field != 'value'``  — strip entire condition if value is invalid
-    - ``AND field IN (...)``    — drop invalid values; strip condition if all invalid
-    - ``AND field NOT IN (...)``— drop invalid values; strip condition if all invalid
 
-    Args:
-        jql:     JQL string (post-processed by earlier strip steps).
-        allowed: {field_id: [canonical_value, ...]} from fetch_allowed_values().
 
-    Returns:
-        JQL with invalid-value conditions removed.
+def _truncate_field_desc(desc: str, max_chars: int = 500) -> str:
+    """Truncate a field description to max_chars while preserving the JQL clause and field ID.
+
+    Blindly slicing at max_chars can drop the 'Used in JQL as' and 'Field ID' footer,
+    which are the parts the LLM needs most for generating correct JQL. Instead, truncate
+    only the allowed-values section in the middle and always keep the footer intact.
     """
-    if not allowed:
-        return jql
-
-    normed: dict[str, set[str]] = {
-        fid.lower(): {v.lower() for v in vals}
-        for fid, vals in allowed.items()
-    }
-
-    def _check_equality(m: re.Match) -> str:
-        field = m.group(1)
-        field_key = field.lower()
-        value = m.group(3)
-        if field_key not in normed:
-            return m.group(0)
-        if value.lower() in normed[field_key]:
-            return m.group(0)
-        logger.warning(
-            "JQL: value %r is not valid for field %r — stripping condition "
-            "(allowed sample: %s)",
-            value, field, list(allowed.get(field_key, []))[:5],
-        )
-        return ""
-
-    def _check_in(m: re.Match) -> str:
-        field = m.group(1)
-        field_key = field.lower()
-        if field_key not in normed:
-            return m.group(0)
-        in_keyword = m.group(2)
-        # Parse values whether quoted or unquoted: 'Bug', "Story", Epic
-        raw_values = [v.strip().strip("'\"") for v in m.group(3).split(',') if v.strip()]
-        valid = [v for v in raw_values if v.lower() in normed[field_key]]
-        invalid = [v for v in raw_values if v.lower() not in normed[field_key]]
-        if invalid:
-            logger.warning(
-                "JQL: invalid values for field %r %s clause — dropping: %s",
-                field, in_keyword.upper(), invalid,
-            )
-        if not valid:
-            logger.warning(
-                "JQL: all values invalid for field %r %s clause — stripping condition",
-                field, in_keyword.upper(),
-            )
-            return ""
-        valid_str = ", ".join(valid)
-        return f" AND {field} {in_keyword} ({valid_str})"
-
-    result = _JQL_AND_EQUALITY_RE.sub(_check_equality, jql)
-    result = _JQL_AND_IN_RE.sub(_check_in, result)
-    return result.strip()
-
-
-def _quote_multiword_in_values(jql: str) -> str:
-    """Quote unquoted multi-word values inside IN (...) clauses.
-
-    Jira JQL requires values containing spaces to be quoted.
-    e.g. issuetype in (Requirements Change Request) → issuetype in ("Requirements Change Request")
-    """
-    def _fix(m: re.Match) -> str:
-        in_kw = m.group(1)
-        parts = [p.strip() for p in m.group(2).split(",") if p.strip()]
-        fixed = []
-        for p in parts:
-            if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
-                fixed.append(p)
-            elif " " in p:
-                fixed.append(f'"{p}"')
-            else:
-                fixed.append(p)
-        return f"{in_kw} ({', '.join(fixed)})"
-    return _JQL_IN_CLAUSE_RE.sub(_fix, jql)
+    if len(desc) <= max_chars:
+        return desc
+    jql_idx = desc.find(" Used in JQL")
+    if jql_idx != -1:
+        footer = desc[jql_idx:]
+        keep = max_chars - len(footer)
+        if keep > 20:
+            return desc[:keep].rstrip(", ") + " ..." + footer
+    return desc[:max_chars]
 
 
 def _parse_limit(query: str) -> int:
@@ -414,6 +362,9 @@ class AtlasMind:
         self.standard_field_ids: list[str] = list(STANDARD_FIELD_IDS)
         # {field_id: [allowed_value_strings]} — populated in run() from the vector DB.
         self.allowed_values: dict[str, list[str]] = {}
+        # Populated in run() — None until startup completes.
+        self.jql_sanitizer: JqlSanitizer | None = None
+        self.field_value_embeddings: JiraFieldValueEmbeddings | None = None
 
         self._init_llm_backend(llm_backend)
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
@@ -458,7 +409,10 @@ class AtlasMind:
         # intent field name resolution and field ID validation.
         name_to_id, id_to_name = self.jira_field_embeddings.fetch_field_mappings()
         self.field_resolver = FieldResolver.from_db_mappings(
-            name_to_id, id_to_name, max_intent_fields=MAX_INTENT_FIELDS
+            name_to_id, id_to_name, max_intent_fields=MAX_INTENT_FIELDS,
+            fuzzy_field_fn=lambda name: self.jira_field_embeddings.find_similar_field_name(
+                name, self.document_processor._model
+            ),
         )
 
         # Validate configured standard field IDs against the vector DB.
@@ -469,14 +423,36 @@ class AtlasMind:
         # Load allowed values for JQL condition validation before API execution.
         self.allowed_values = self.jira_field_embeddings.fetch_allowed_values()
 
+        # Seed per-value embeddings and construct the sanitizer.
+        av_file = get_data_dir(profile.jira_url) / JIRA_ALLOWED_VALUES_FILENAME
+        self.field_value_embeddings = JiraFieldValueEmbeddings(self.embedconfig, self.document_processor)
+        self.field_value_embeddings.setup_table()
+        self.field_value_embeddings.seed(self.allowed_values, id_to_name, av_file)
+
+        self.jql_sanitizer = JqlSanitizer(
+            name_to_id=name_to_id,
+            id_to_name=id_to_name,
+            allowed_values=self.allowed_values,
+            field_value_embeddings=self.field_value_embeddings,
+            model=self.document_processor._model,
+        )
+
     async def _build_prompt(self, query: str) -> tuple[str, list[str]]:
         """Build a RAG-grounded prompt combining system instructions with retrieved context.
 
+        Encodes the query once and runs two parallel lookups:
+        - jira_fields vector search → top relevant fields and their descriptions
+        - jira_field_values search → top-N query-relevant allowed values per field
+
+        The per-field value hints are injected alongside the field description so
+        the LLM sees the most contextually relevant values upfront, before generation.
+        This is the pre-generation complement to the sanitizer's post-generation
+        correction — reducing hallucinations on the first pass rather than fixing them.
+
         Returns:
             tuple of:
-                - prompt string to send to the LLM
-                - list of field IDs retrieved from the vector search (used to ensure
-                  all fields the LLM was shown are requested back from the Jira REST API)
+                - full prompt string to send to the LLM
+                - list of field IDs from the vector search (fetched back from Jira REST API)
         """
         model = self.document_processor._model
 
@@ -486,12 +462,47 @@ class AtlasMind:
         # row = (id, field_id, field_name, field_type, is_custom, description, distance)
         rag_field_ids: list[str] = [row[1] for row in jira_fields]
 
+        # Encode the user query once and reuse across all per-field value searches.
+        # Offloaded to a thread executor so model.encode does not block the event loop.
+        loop = asyncio.get_event_loop()
+        query_emb = await loop.run_in_executor(
+            None,
+            lambda: model.encode(query, normalize_embeddings=True),
+        )
+
+        # For each relevant field with discrete allowed values, retrieve the top-N
+        # values semantically closest to the user query. These are injected into the
+        # field description line so the LLM sees query-ranked values before generation
+        # rather than only the first N values from the truncated description.
+        value_hints: dict[str, list[str]] = {}
+        if self.field_value_embeddings:
+            for row in jira_fields:
+                field_id = row[1]
+                if field_id in self.allowed_values:
+                    similar = self.field_value_embeddings.find_similar_values_by_embedding(
+                        field_id=field_id,
+                        query_embedding=query_emb,
+                    )
+                    if similar:
+                        value_hints[field_id] = [s.value for s in similar]
+
+        if value_hints:
+            logger.info(
+                "Value hints injected for %d field(s): %s",
+                len(value_hints),
+                {fid: vals for fid, vals in value_hints.items()},
+            )
+
         system_prompt = self.system_prompt_dir.read_text(encoding="utf-8")
 
-        # Cap each field description to prevent token bloat from fields with
-        # hundreds of allowed values (e.g. version fields in large projects).
-        _MAX_DESC = 500
-        fields_block = "\n".join(f"  - {row[5][:_MAX_DESC]}" for row in jira_fields)
+        def _field_line(row: tuple) -> str:
+            desc = _truncate_field_desc(row[5])
+            hints = value_hints.get(row[1])
+            if hints:
+                return f"  - {desc} [Query-relevant values: {', '.join(hints)}]"
+            return f"  - {desc}"
+
+        fields_block = "\n".join(_field_line(row) for row in jira_fields)
         examples_block = "\n\n".join(
             f"  -- {row[1]}\n  {row[2]}" for row in jql_examples
         )
@@ -521,15 +532,21 @@ class AtlasMind:
         )
 
         full_prompt = system_prompt + context
+        token_usage = TokenUsage(
+            system_tokens=len(system_prompt) // 4,
+            fields_tokens=len(fields_block) // 4,
+            examples_tokens=len(examples_block) // 4,
+            total_tokens=len(full_prompt) // 4,
+        )
         logger.info(
             "Prompt sizes — system: %d chars (~%d tokens), fields_block: %d chars (~%d tokens), "
             "examples_block: %d chars (~%d tokens), total: %d chars (~%d tokens)",
-            len(system_prompt), len(system_prompt) // 4,
-            len(fields_block), len(fields_block) // 4,
-            len(examples_block), len(examples_block) // 4,
-            len(full_prompt), len(full_prompt) // 4,
+            len(system_prompt), token_usage.system_tokens,
+            len(fields_block), token_usage.fields_tokens,
+            len(examples_block), token_usage.examples_tokens,
+            len(full_prompt), token_usage.total_tokens,
         )
-        return full_prompt, rag_field_ids
+        return full_prompt, rag_field_ids, token_usage
 
     async def _execute_query(
         self,
@@ -653,14 +670,20 @@ class AtlasMind:
             logger.info("*** AI answer: %s", route.answer)
             return JqlResponse(jql=None, chart_spec=None, answer=route.answer), None
 
-        prompt, rag_field_ids = await self._build_prompt(query)
+        prompt, rag_field_ids, token_usage = await self._build_prompt(query)
         raw = await self.llm_client.generate_jql(prompt)
         logger.debug("LLM raw response: %s", raw)
 
         try:
             data = json.loads(_extract_json_object(raw), strict=False)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"LLM response is not valid JSON: {raw!r}") from exc
+        except json.JSONDecodeError:
+            try:
+                data = json.loads(_extract_json_object(_repair_jql_quotes(raw)), strict=False)
+                logger.warning("LLM response had unescaped quotes in jql — repaired.")
+            except json.JSONDecodeError as exc:
+                _err = ValueError(f"LLM response is not valid JSON: {raw!r}")
+                _err.token_usage = token_usage  # type: ignore[attr-defined]
+                raise _err from exc
 
         llm_result = JqlResponse(**data)
         logger.info("*** AI JQL: %s", llm_result.jql)
@@ -674,7 +697,9 @@ class AtlasMind:
 
         jira_result = None
         if llm_result.jql:
-            clean_jql = self._sanitize_jql(llm_result.jql)
+            sanitized = self._sanitize_jql(llm_result.jql)
+            current_jql = sanitized.jql
+            pending_hints = sanitized.hints
 
             resolved = (
                 self.field_resolver.resolve(llm_result.intent_fields)
@@ -690,7 +715,7 @@ class AtlasMind:
                 dict.fromkeys((resolved.field_ids or []) + rag_field_ids)
             )
             max_results = _parse_limit(query)
-            current_jql = clean_jql
+            accumulated_prompt = prompt  # grows with each retry block
 
             for attempt in range(1, JQL_MAX_ATTEMPTS + 1):
                 try:
@@ -704,6 +729,7 @@ class AtlasMind:
                     break
                 except ValueError as exc:
                     if attempt == JQL_MAX_ATTEMPTS:
+                        exc.token_usage = token_usage  # type: ignore[attr-defined]
                         raise
                     retry_num = attempt
                     logger.warning("JQL attempt %d failed — retry[%d] with error context", attempt, retry_num)
@@ -726,71 +752,132 @@ class AtlasMind:
                         logger.info("  retry[%d] JQL after value strip: %s", retry_num, current_jql)
                         continue
 
+                    # Unsupported operator on field (e.g. comment IS NOT EMPTY, comment ~ ''):
+                    # JQL limitation — the LLM cannot fix this; rewrite or strip deterministically.
+                    unsupported_fields = _extract_unsupported_op_fields(exc_str)
+                    if unsupported_fields:
+                        for f in unsupported_fields:
+                            fp = re.escape(f)
+                            before = current_jql
+                            # IS NOT EMPTY → text-search existence check (comment ~ '.')
+                            current_jql = re.sub(
+                                rf"\b{fp}\s+IS\s+NOT\s+EMPTY\b",
+                                f"{f} ~ '.'",
+                                current_jql,
+                                flags=re.IGNORECASE,
+                            )
+                            # empty-string text search (comment ~ '') → same rewrite
+                            current_jql = re.sub(
+                                rf"\b{fp}\s*~\s*(?:''|\"\")",
+                                f"{f} ~ '.'",
+                                current_jql,
+                                flags=re.IGNORECASE,
+                            )
+                            if current_jql != before:
+                                logger.warning("  retry[%d] Field %r: rewrote EMPTY search to %r ~ '.'", retry_num, f, f)
+                            else:
+                                # IS EMPTY — no JQL workaround; strip the condition
+                                current_jql = _strip_field_conditions(current_jql, [f])
+                                logger.warning("  retry[%d] Field %r: IS EMPTY has no JQL workaround — stripped condition", retry_num, f)
+                        logger.info("  retry[%d] JQL after unsupported-op rewrite: %s", retry_num, current_jql)
+                        continue
+
+                    # Field supports IN/NOT IN but not IS/IS NOT (e.g. issueLinkType IS NOT EMPTY):
+                    # strip the IS [NOT] EMPTY condition inline — LLM cannot fix this.
+                    unsupported_op_fields = _extract_unsupported_operator_fields(exc_str)
+                    if unsupported_op_fields:
+                        for f in unsupported_op_fields:
+                            fp = re.escape(f)
+                            current_jql = re.sub(
+                                rf"\s+AND\s+{fp}\s+IS\s+(?:NOT\s+)?(?:EMPTY|NULL)",
+                                "",
+                                current_jql,
+                                flags=re.IGNORECASE,
+                            )
+                            current_jql = re.sub(
+                                rf"^{fp}\s+IS\s+(?:NOT\s+)?(?:EMPTY|NULL)\s*(?:AND\s+)?",
+                                "",
+                                current_jql.strip(),
+                                flags=re.IGNORECASE,
+                            )
+                            logger.warning("  retry[%d] Field %r: operator not supported — stripped IS [NOT] EMPTY condition", retry_num, f)
+                        logger.info("  retry[%d] JQL after unsupported-operator strip: %s", retry_num, current_jql)
+                        continue
+
                     error_fields = _extract_error_fields(exc_str)
+                    _accumulated_before = len(accumulated_prompt)
                     if len(error_fields) == 1:
                         logger.warning("  retry[%d] Bad field: %s — using targeted retry prompt", retry_num, error_fields[0])
-                        retry_prompt = prompt + JQL_RETRY_FIELD_TEMPLATE.format(
+                        retry_prompt = accumulated_prompt + JQL_RETRY_FIELD_TEMPLATE.format(
                             field=error_fields[0],
                             bad_jql=current_jql,
                         )
                     elif error_fields:
                         fields_str = ", ".join(f"'{f}'" for f in error_fields)
                         logger.warning("  retry[%d] Bad fields: %s — using multi-field retry prompt", retry_num, fields_str)
-                        retry_prompt = prompt + JQL_RETRY_FIELDS_TEMPLATE.format(
+                        retry_prompt = accumulated_prompt + JQL_RETRY_FIELDS_TEMPLATE.format(
                             fields=fields_str,
                             bad_jql=current_jql,
                         )
                     else:
-                        retry_prompt = prompt + JQL_RETRY_TEMPLATE.format(
+                        retry_prompt = accumulated_prompt + JQL_RETRY_TEMPLATE.format(
                             bad_jql=current_jql,
                             error=exc,
                         )
+
+                    # Append sanitizer value hints when present — these give the LLM
+                    # the closest valid candidates for any stripped invalid values,
+                    # bounded to top-N so token cost stays small.
+                    if pending_hints:
+                        hint_text = "\n".join(h.to_prompt_text() for h in pending_hints)
+                        retry_prompt += JQL_RETRY_VALUE_HINTS_TEMPLATE.format(hints=hint_text)
+                        logger.info("  retry[%d] Injecting %d value hint(s) into retry prompt.", retry_num, len(pending_hints))
+
+                    accumulated_prompt = retry_prompt
+
+                    _ext_tokens = (len(retry_prompt) - _accumulated_before) // 4
+                    token_usage.retry_tokens += _ext_tokens
+                    logger.info(
+                        "  retry[%d] Prompt sizes — base: %d tokens, extension: %d tokens, total: %d tokens, cumulative_retry: %d tokens",
+                        retry_num,
+                        token_usage.total_tokens,
+                        _ext_tokens,
+                        len(retry_prompt) // 4,
+                        token_usage.retry_tokens,
+                    )
+
                     retry_raw = await self.llm_client.generate_jql(retry_prompt)
                     logger.debug("retry[%d] LLM raw response: %s", retry_num, retry_raw)
 
                     try:
                         retry_data = json.loads(_extract_json_object(retry_raw), strict=False)
-                    except json.JSONDecodeError as parse_exc:
-                        raise ValueError(f"LLM retry[{retry_num}] response is not valid JSON: {retry_raw!r}") from parse_exc
+                    except json.JSONDecodeError:
+                        try:
+                            retry_data = json.loads(_extract_json_object(_repair_jql_quotes(retry_raw)), strict=False)
+                            logger.warning("retry[%d] LLM response had unescaped quotes in jql — repaired.", retry_num)
+                        except json.JSONDecodeError as parse_exc:
+                            _err = ValueError(f"LLM retry[{retry_num}] response is not valid JSON: {retry_raw!r}")
+                            _err.token_usage = token_usage  # type: ignore[attr-defined]
+                            raise _err from parse_exc
 
                     llm_result = JqlResponse(**retry_data)
-                    current_jql = self._sanitize_jql(llm_result.jql or "")
+                    sanitized = self._sanitize_jql(llm_result.jql or "")
+                    current_jql = sanitized.jql
+                    pending_hints = sanitized.hints
                     logger.info("*** AI JQL retry[%d]: %s", retry_num, current_jql)
 
             jira_result["resolved_intent_fields"] = resolved
+            jira_result["token_usage"] = token_usage
 
         return llm_result, jira_result
 
-    def _sanitize_jql(self, jql: str) -> str:
-        """Apply all deterministic JQL cleanup passes in order."""
-        quoted = _quote_multiword_in_values(jql)
-        if quoted != jql:
-            logger.info("JQL after multi-word value quoting: %s", quoted)
-        clean = _JQL_LIMIT_RE.sub("", quoted).strip()
-        if clean != quoted:
-            logger.info("JQL after LIMIT strip: %s", clean)
+    def _sanitize_jql(self, jql: str) -> SanitizeResult:
+        """Delegate all JQL cleanup passes to JqlSanitizer.
 
-        stripped = _JQL_ARITHMETIC_ORDER_RE.sub("", clean).strip()
-        if stripped != clean:
-            logger.warning("JQL contained arithmetic in ORDER BY — stripped: %s", clean)
-            clean = stripped
-
-        stripped = _JQL_FIELD_ARITH_COND_RE.sub("", clean).strip()
-        if stripped != clean:
-            logger.warning(
-                "JQL contained field-to-field date arithmetic in WHERE (unsupported by Jira) — stripped: %s",
-                clean,
-            )
-            clean = stripped
-
-        unquoted = _JQL_QUOTED_NUMBER_RE.sub(r"\2", clean)
-        if unquoted != clean:
-            logger.info("JQL after numeric dequote: %s", unquoted)
-            clean = unquoted
-
-        validated = _validate_jql_values(clean, self.allowed_values)
-        if validated != clean:
-            logger.info("JQL after allowed-values validation: %s", validated)
-            clean = validated
-
-        return clean
+        Returns a SanitizeResult with the cleaned JQL string, any auto-corrections
+        made (logged), and any ValueHints to inject into the next retry prompt.
+        Falls back to a no-op result when called before run() completes.
+        """
+        if self.jql_sanitizer is None:
+            return SanitizeResult(jql=jql)
+        return self.jql_sanitizer.sanitize(jql)

@@ -9,7 +9,7 @@ from core.atlasmind import AtlasMind, normalize_issue, _FIELD_ID_TO_OUTPUT_KEY
 from core.vllm_client import VllmUnavailable
 from core.field_resolver import ExtraField, ResolvedIntentFields
 from dconfig import EmbeddingsConfig
-from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta
+from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta, TokenUsage
 from core.client_events import ClientEvent, ClientEventType, EventAck
 import core.client_events as client_events
 from config.jira_config import load_active_jira_profile
@@ -164,10 +164,11 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
         chart_spec=chart_spec,
         filters=_extract_filters(normalised),
         meta=_server_meta,
+        token_usage=jira_result.get("token_usage"),
     )
 
 
-def _error_response(message: str) -> dict:
+def _error_response(message: str, token_usage: TokenUsage | None = None) -> dict:
     """Return a general-type response carrying an error message for the frontend."""
     profile = load_active_jira_profile()
     return QueryResponse(
@@ -175,6 +176,7 @@ def _error_response(message: str) -> dict:
         profile=profile.name,
         jira_base_url=profile.jira_url,
         answer=f"Error: {message}",
+        token_usage=token_usage,
     ).model_dump()
 
 
@@ -221,13 +223,13 @@ async def query_get(
         return _error_response("Query cancelled.")
     except VllmUnavailable as exc:
         logger.error("Query failed — vLLM unavailable: %s", exc)
-        return _error_response("LLM service is temporarily unavailable. Please try again later.")
+        return _error_response("LLM service is temporarily unavailable. Please try again later.", getattr(exc, "token_usage", None))
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
-        return _error_response(str(exc))
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     except Exception as exc:
         logger.exception("Query failed (unexpected): %s", exc)
-        return _error_response(str(exc))
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     finally:
         if request_id:
             client_events.unregister(request_id)
@@ -262,13 +264,13 @@ async def query_post(
         return _error_response("Query cancelled.")
     except VllmUnavailable as exc:
         logger.error("Query failed — vLLM unavailable: %s", exc)
-        return _error_response("LLM service is temporarily unavailable. Please try again later.")
+        return _error_response("LLM service is temporarily unavailable. Please try again later.", getattr(exc, "token_usage", None))
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
-        return _error_response(str(exc))
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     except Exception as exc:
         logger.exception("Query failed (unexpected): %s", exc)
-        return _error_response(str(exc))
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     finally:
         if request.request_id:
             client_events.unregister(request.request_id)
