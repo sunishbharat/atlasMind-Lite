@@ -6,6 +6,10 @@ logger = logging.getLogger(__name__)
 
 _GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# Same marker used by Bedrock and Claude clients — splits stable system prompt
+# from dynamic RAG context (field descriptions, examples, user query).
+_CACHE_SPLIT_MARKER = "\n\n## Available Jira Fields"
+
 
 class GroqUnavailable(Exception):
     pass
@@ -32,9 +36,24 @@ class GroqClient:
         timeout = httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=5.0)
         logger.info("Groq client generating response using model: %s", self.model)
 
+        split_idx = prompt.find(_CACHE_SPLIT_MARKER)
+        if split_idx != -1:
+            system_text = prompt[:split_idx]
+            user_text = prompt[split_idx:]
+            messages = [
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ]
+            logger.debug(
+                "Groq split prompt — system: %d chars, user: %d chars",
+                len(system_text), len(user_text),
+            )
+        else:
+            messages = [{"role": "user", "content": prompt}]
+
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
@@ -59,7 +78,16 @@ class GroqClient:
         except httpx.HTTPStatusError as e:
             raise GroqUnavailable(f"Groq API error {e.response.status_code}: {e.response.text}") from e
 
-        text = response.json()["choices"][0]["message"]["content"].strip()
+        data = response.json()
+        usage = data.get("usage", {})
+        logger.info(
+            "Groq token usage — input: %d, output: %d, total: %d",
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            usage.get("total_tokens", 0),
+        )
+
+        text = data["choices"][0]["message"]["content"].strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]

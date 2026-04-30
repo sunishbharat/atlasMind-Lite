@@ -31,12 +31,15 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `JQL_OLLAMA_TIMEOUT` | `120` | Read timeout in seconds for LLM inference |
 | `GROQ_API_KEY` | — | Groq API key (local dev) |
 | `GROQ_API_KEY_OCID` | — | OCI Vault secret OCID for `GROQ_API_KEY` (takes priority over `GROQ_API_KEY`) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq model name |
+| `GROQ_MODEL` | `meta-llama/llama-4-scout-17b-16e-instruct` | Groq model name |
 | `JQL_ANNOTATION_FILE` | `data/jira_jql_annotated_queries.md` | Path to JQL annotation file |
 | `MAX_JIRA_RESULTS` | `2000` | Maximum number of Jira issues fetched per query (paginated automatically) |
 | `JQL_MAX_ATTEMPTS` | `4` | Total JQL attempts per query: 1 initial + (`JQL_MAX_ATTEMPTS` − 1) retries on Jira validation errors |
 | `MAX_INTENT_FIELDS` | `5` | Maximum extra fields the LLM may propose per query |
 | `STANDARD_FIELD_IDS` | `key,summary,assignee,priority,issuetype,created,resolutiondate` | Comma-separated list of Jira field IDs always shown in results — override per project or Docker deployment |
+| `VALUE_HINT_THRESHOLD` | `0.40` | Cosine distance threshold for JQL value correction — bad values within this distance of a known allowed value are flagged |
+| `VALUE_HINT_MAX_CANDIDATES` | `3` | Maximum candidate values surfaced per field for JQL sanitizer corrections |
+| `VALUE_PROMPT_MAX_CANDIDATES` | `3` | Maximum candidate values injected into the retry prompt as hints for the LLM |
 | `VLLM_URL` | — | vLLM server base URL (e.g. `http://100.x.x.x:8002`) |
 | `VLLM_TIMEOUT` | `240` | Read timeout in seconds for vLLM inference |
 | `VLLM_MAX_TOKENS` | — | Max tokens for vLLM responses |
@@ -47,7 +50,7 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `AWS_BEARER_TOKEN_BEDROCK` | — | Bearer token for the Bedrock-compatible endpoint; used when `--model bedrock` |
 | `CUSTOM_ENDPOINT` | — | Bedrock-compatible API endpoint URL — required for `--model bedrock` |
 | `BEDROCK_REGION` | `custom` | Region name passed to boto3 (gateway may override internally) |
-| `BEDROCK_MODEL` | `claude-sonnet-4` | Model ID sent to the Bedrock endpoint |
+| `BEDROCK_MODEL` | `claude-sonnet-4.6` | Model ID sent to the Bedrock endpoint |
 
 ## Running the app
 
@@ -175,11 +178,16 @@ Overrides work across all LLM backends (Ollama, Groq, vLLM, Claude, Bedrock).
 3. At query time, `QueryRouter` makes a single fast LLM call to classify the query:
    - **General query** → answered immediately; no embeddings or Jira API calls
    - **JQL query** → full RAG pipeline: encode → similarity search → prompt → LLM → Jira API
-4. The assembled prompt (system instructions + fields + examples + query) is sent to the active LLM (Ollama, Groq, or vLLM)
-5. LLM returns structured JSON with `jql`, `chart_spec`, and `answer`
-6. JQL is post-processed (strip LIMIT, arithmetic ORDER BY), then executed against the Jira REST API. On validation failure, the Jira error is appended to the prompt and the LLM is asked to correct the JQL — up to `JQL_MAX_ATTEMPTS` total attempts (default 4). When Jira identifies a specific invalid field by name, a targeted prompt instructs the model to remove that exact condition rather than guess a fix.
+4. The assembled prompt is split on the `## Available Jira Fields` marker and sent to the active LLM. For Claude and Bedrock the stable system instructions (before the marker) are sent as a cached system block — billed at ~90% less on subsequent requests in the same session. For Groq the split maps to OpenAI `system` / `user` roles. Ollama and vLLM receive the full prompt as a single string. Actual token counts (including cache hits) are logged from every API response
+5. LLM returns structured JSON with `jql`, `intent_fields`, `chart_spec`, and `answer`
+6. `intent_fields` (LLM-proposed display columns) are resolved via `FieldResolver`. Exact name matches are tried first; unknown names fall back to embedding similarity search against the field metadata vector store — catching LLM variants like `fixVersion` → `Fix Version/s` without any extra LLM call
+7. JQL is validated by `JqlSanitizer` before execution. Invalid field values are detected by cosine similarity against the `jira_field_values` vector store and corrected deterministically — no LLM call needed for known-value fields
+8. The validated JQL is executed against the Jira REST API. On failure, the Jira error is appended to the accumulated retry prompt and the LLM is asked to correct the JQL — each successive retry carries the full failure history of all prior attempts so the model sees every error at once. Up to `JQL_MAX_ATTEMPTS` total attempts (default 4). Certain errors are fixed deterministically without an LLM call: invalid field values are stripped, `comment IS NOT EMPTY` is rewritten to `comment ~ '.'`, and unsupported `IS [NOT] EMPTY` operators on fields like `issueLinkType` are stripped inline
+9. Token usage (system prompt, field block, examples, and cumulative retry tokens) is tracked per query and returned in `token_usage` on every response — including error responses
 
 Both seeding steps are hash-gated — re-encoding is skipped if the source files have not changed since the last run.
+
+A third vector table (`jira_field_values`) stores one embedding per `(field_id, allowed_value)` pair. It is seeded from the `jira_allowed_values.json` file at startup and used by the `JqlSanitizer` for pure-DB value correction — no LLM call, no token cost.
 
 **Jira fields are stored per domain** under `data/{domain_slug}/` (e.g. `data/issues_apache_org/jira_fields.json`). Switching the active profile in `config/profiles.json` automatically uses the correct set of files for that Jira instance.
 
@@ -192,14 +200,16 @@ Both seeding steps are hash-gated — re-encoding is skipped if the source files
 | `core/atlasmind.py` | Top-level orchestrator — `run()` seeds both DBs, `generate_jql()` is the query entry point |
 | `core/router.py` | Two-stage query router — fast LLM classify before triggering RAG pipeline |
 | `core/ollama_client.py` | Sync `test_connection()` and async `generate_jql()` against the Ollama API |
-| `core/groq_client.py` | Async Groq REST client (OpenAI-compatible); used when `--model groq` |
+| `core/groq_client.py` | Async Groq REST client (OpenAI-compatible); splits prompt into `system` / `user` roles at the `## Available Jira Fields` marker; logs token usage; used when `--model groq` |
 | `core/vllm_client.py` | Async vLLM REST client (OpenAI-compatible); auto-detects model from `/v1/models`; used when `--model vllm` |
-| `core/claude_client.py` | Async Anthropic SDK client; used when `--model claude` |
-| `core/bedrock_claude_client.py` | boto3 `converse()` client for Bedrock-compatible endpoints; used when `--model bedrock` |
+| `core/claude_client.py` | Async Anthropic SDK client; caches system prompt via `cache_control: ephemeral` + `anthropic-beta` header; logs input/output/cache token counts; used when `--model claude` |
+| `core/bedrock_claude_client.py` | boto3 `converse()` client for Bedrock-compatible endpoints; caches system prompt via `cacheConfig: default` in the `system` block; used when `--model bedrock` |
 | `core/jira_auth.py` | Per-request Jira auth — `X-Jira-Token` and `X-Jira-Url` FastAPI dependencies; `JiraProfile` / `JiraCredential` Pydantic models |
 | `cloud/oci_vault.py` | OCI Vault secret fetching via Instance Principal; fallback to plain env var |
 | `rag/jql_embeddings.py` | Seeds and searches the JQL annotation pgvector table |
-| `rag/jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table |
+| `rag/jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table; `find_similar_field_name()` provides embedding fallback for unknown intent field names |
+| `rag/jira_field_value_embeddings.py` | Seeds and searches the `jira_field_values` pgvector table — one embedding per `(field_id, allowed_value)` pair; used by `JqlSanitizer` for value correction without LLM calls |
+| `core/jql_sanitizer.py` | Deterministic JQL pre-execution corrections: strips invalid field values, rewrites unsupported operators, injects value-hint candidates into retry prompts |
 | `jira/jira_field_api.py` | Fetches field metadata and allowed values from the Jira REST API |
 | `seed_manager.py` | MD5 hash-based seeding gate stored in a `seed_metadata` pgvector table |
 | `config/profiles.json` | Jira connection profiles (URL, credentials); `default` key selects the active one |
@@ -245,14 +255,37 @@ Both headers are optional. When absent, the active profile values are used as fa
 
 ## Response model
 
-`generate_jql()` returns a `JqlResponse` Pydantic model:
+The `/query` endpoint returns a `QueryResponse` Pydantic model:
 
 ```python
-class JqlResponse(BaseModel):
-    jql: str | None        # None when the query is not Jira-related
-    chart_spec: dict | None
-    answer: str
+class QueryResponse(BaseModel):
+    type:           str                        # "jql" or "general"
+    profile:        str                        # active Jira profile name
+    jira_base_url:  str
+    answer:         str | None
+    jql:            str | None                 # None for general queries
+    total:          int                        # total matching issues in Jira
+    shown:          int                        # issues returned in this response
+    display_fields: list[str]                  # ordered column headers for the frontend
+    issues:         list[dict]                 # normalised issue dicts
+    chart_spec:     ChartSpec | None
+    filters:        dict[str, list[str]] | None  # facet values for filter dropdowns
+    meta:           ServerMeta | None          # model name, backend, timeout
+    token_usage:    TokenUsage | None          # prompt token estimates for this query
 ```
+
+`TokenUsage` breaks down prompt size per query:
+
+```python
+class TokenUsage(BaseModel):
+    system_tokens:   int   # system prompt character count ÷ 4
+    fields_tokens:   int   # field context block ÷ 4
+    examples_tokens: int   # RAG examples block ÷ 4
+    total_tokens:    int   # total prompt tokens for the initial LLM call
+    retry_tokens:    int   # cumulative tokens added across all retry extensions
+```
+
+`token_usage` is present on every response including error responses, so the frontend can track cost even when a query fails.
 
 For general (non-Jira) questions, `jql` and `chart_spec` are `None` and `answer` contains the plain-text response.
 
