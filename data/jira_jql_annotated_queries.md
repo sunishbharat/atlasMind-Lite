@@ -1422,3 +1422,10 @@ project = KAFKA AND created >= "2025-01-01" AND created <= "2025-03-31" ORDER BY
 
 /* 452. Open HIVE issues from 2024 (all four quarters), by project then creation date */
 project = HIVE AND resolution IS EMPTY AND created >= "2024-01-01" AND created <= "2024-12-31" ORDER BY project, created ASC
+
+/* 453. List all issues resolved in projects KAFKA and HIVE in 2026 quarter 1 */
+project in (KAFKA, HIVE)  AND status = Closed  AND resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
+
+
+/* 454. List all issues resolved or closed or solved or done or fixed in projects KAFKA and HIVE in 2026 quarter 1 */
+project in (KAFKA, HIVE)  and resolution in (Resolved, Fixed) OR resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
