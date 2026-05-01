@@ -1411,3 +1411,14 @@ project in (KAFKA, HIVE, ZOOKEEPER) AND issueLinkType in (  "blocks",  "is block
 /* 448. In project KAFKA, find Epics that have linked Stories, and Stories that in turn have linked Tasks or Sub-tasks. Use this as the base set; build Epic → Story → Task/Sub-task link chains in post-processing. */
 project = KAFKA AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by") and issuetype in (Story, Task, Sub-task, Epic)
 
+/* 449. List all closed issues in projects KAFKA and HIVE from Q1 2026 (January–March), sorted by resolution date */
+project in (KAFKA, HIVE)  AND status = Closed  AND resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
+
+/* 450. Bugs in project FLINK fixed in 2025, ordered by resolution date */
+project = FLINK AND issuetype = Bug AND resolution = Fixed AND resolutiondate >= "2025-01-01" AND resolutiondate <= "2025-12-31" ORDER BY resolutiondate DESC
+
+/* 451. Issues from project KAFKA created in Q1 2025 (Jan–Mar), newest first */
+project = KAFKA AND created >= "2025-01-01" AND created <= "2025-03-31" ORDER BY created DESC
+
+/* 452. Open HIVE issues from 2024 (all four quarters), by project then creation date */
+project = HIVE AND resolution IS EMPTY AND created >= "2024-01-01" AND created <= "2024-12-31" ORDER BY project, created ASC
