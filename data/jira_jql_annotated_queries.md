@@ -1499,118 +1499,40 @@ project = KAFKA AND fixVersion = "3.9.0" AND status not in (Closed, Resolved) AN
 /* 475. Show executive risk summary — all unresolved blockers and criticals across KAFKA, HIVE, FLINK, ZOOKEEPER older than 45 days with no update in the last 7 days indicating stalled delivery */
 project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND created <= -45d AND updated <= -7d ORDER BY created ASC, priority DESC
 
-/* 476. Show all bugs that were resolved by developers but not yet verified by QA, 
-sitting unverified for more than 5 days across KAFKA and HIVE — indicating QA pipeline backlog */
-project in (KAFKA, HIVE) AND issuetype = Bug AND status = Resolved AND updated <= -5d 
-AND resolution = Fixed AND assignee != currentUser() 
-ORDER BY updated ASC, priority DESC
-
-/* 477. Show all issues targeting the next two upcoming fix versions in KAFKA 
-that are still unresolved within 14 days of their due date — flagging release readiness risk */
-project = KAFKA AND fixVersion in unreleasedVersions() AND status not in (Closed, Resolved) 
-AND due <= 14d AND due >= now() 
-ORDER BY fixVersion ASC, priority DESC, due ASC
-
-/* 478. Show all issues in the active sprint across KAFKA and FLINK 
-that have not been updated in more than 3 days — identifying blocked or idle work items */
-project in (KAFKA, FLINK) AND sprint in openSprints() AND updated <= -3d 
-AND status not in (Closed, Resolved) AND assignee is not EMPTY 
-ORDER BY updated ASC, priority DESC
-
-/* 479. Show all issues assigned to me across KAFKA, HIVE, FLINK 
-that are due in the next 7 days, are in progress, and have linked blocking dependencies 
-still unresolved — helping prioritize work with upstream blockers */
-project in (KAFKA, HIVE, FLINK) AND assignee = currentUser() AND status = "In Progress" 
-AND due >= now() AND due <= 7d 
-AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved) AND issueFunction in linkedIssuesOf(\"type = Blocker\")") 
-ORDER BY due ASC, priority DESC
-
-/* 480. Show all unresolved issues across the entire Apache portfolio 
-that have been open for more than 180 days, are blocker or critical priority, 
-have changed assignee more than once indicating ownership churn, 
-and belong to active fix versions — representing the highest strategic delivery risk */
-project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) 
-AND status not in (Closed, Resolved) AND created <= -180d 
-AND fixVersion in unreleasedVersions() AND assignee is not EMPTY 
-ORDER BY created ASC, priority DESC, updated ASC
+/* 476. Show all bugs that were resolved by developers but not yet verified by QA, sitting unverified for more than 5 days across KAFKA and HIVE — indicating QA pipeline backlog */ 
+project in (KAFKA, HIVE) AND issuetype = Bug AND status = Resolved AND updated <= -5d AND resolution = Fixed AND assignee != currentUser() ORDER BY updated ASC, priority DESC
 
 
-/* 481. Show all security-related bugs across KAFKA, HIVE, ZOOKEEPER 
-that have been unresolved for more than 72 hours since creation, are blocker or critical, 
-have no fix version committed, and were not updated in the last 24 hours — 
-indicating unacknowledged security vulnerabilities with no remediation plan */
-project in (KAFKA, HIVE, ZOOKEEPER) 
-AND issuetype = Bug 
-AND labels in (security, vulnerability, CVE) 
-AND priority in (Blocker, Critical) 
-AND created <= -3d 
-AND updated <= -1d 
-AND fixVersion is EMPTY 
-AND status not in (Closed, Resolved) 
-ORDER BY created ASC, priority DESC
+/* 477. Show all issues targeting the next two upcoming fix versions in KAFKA that are still unresolved within 14 days of their due date — flagging release readiness risk */
+project = KAFKA AND fixVersion in unreleasedVersions() AND status not in (Closed, Resolved) AND due <= 14d AND due >= now() ORDER BY fixVersion ASC, priority DESC, due ASC
 
-/* 482. Show all epics across KAFKA, HIVE, FLINK 
-that were due in the last 60 days but are still unresolved, 
-have at least one child issue still open, 
-belong to an unreleased fix version, 
-and have not received any update in the last 10 days — 
-representing stalled program-level deliverables that missed their window */
-project in (KAFKA, HIVE, FLINK) 
-AND issuetype = Epic 
-AND due >= -60d AND due <= now() 
-AND status not in (Closed, Resolved) 
-AND fixVersion in unreleasedVersions() 
-AND updated <= -10d 
-AND issueFunction in subtasksOf("status not in (Closed, Resolved)") 
-ORDER BY due ASC, updated ASC, priority DESC
+/* 478. Show all issues in the active sprint across KAFKA and FLINK that have not been updated in more than 3 days — identifying blocked or idle work items */
+project in (KAFKA, FLINK) AND sprint in openSprints() AND updated <= -3d AND status not in (Closed, Resolved) AND assignee is not EMPTY ORDER BY updated ASC, priority DESC
 
-/* 483. Show all infrastructure and environment related bugs 
-in KAFKA and FLINK that were created during business hours in the last 30 days, 
-are still unresolved, have no assignee, are linked to at least one open incident, 
-and have a severity of critical or blocker — 
-identifying production incidents with no owner that are silently ageing */
-project in (KAFKA, FLINK) 
-AND issuetype = Bug 
-AND labels in (infrastructure, environment, devops, incident, production) 
-AND priority in (Blocker, Critical) 
-AND created >= -30d 
-AND created >= startOfDay("-30d") 
-AND assignee is EMPTY 
-AND status not in (Closed, Resolved) 
-AND issueFunction in linkedIssuesOf("issuetype = Incident AND status not in (Closed, Resolved)") 
-ORDER BY created ASC, priority DESC
+/* 479. Show all issues assigned to me across KAFKA, HIVE, FLINK that are due in the next 7 days, are in progress, and have linked blocking dependencies still unresolved — helping prioritize work with upstream blockers */
+project in (KAFKA, HIVE, FLINK) AND assignee = currentUser() AND status = "In Progress" AND due >= now() AND due <= 7d AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved) AND issueFunction in linkedIssuesOf(\"type = Blocker\")") ORDER BY due ASC, priority DESC
 
-/* 484. Show all issues across KAFKA, HIVE, FLINK, ZOOKEEPER 
-that were resolved in the current quarter but were reopened within 7 days of resolution, 
-are now assigned to a different person than who originally resolved them, 
-and are blocker or critical priority — 
-revealing poor first-time fix rate and ownership handoff problems in the team */
-project in (KAFKA, HIVE, FLINK, ZOOKEEPER) 
-AND issuetype = Bug 
-AND status = Reopened 
-AND priority in (Blocker, Critical) 
-AND resolutiondate >= startOfYear() 
-AND resolutiondate <= now() 
-AND updated >= -7d 
-AND assignee != reporter 
-ORDER BY resolutiondate ASC, priority DESC, updated DESC
 
-/* 485. Show all new features and improvements committed 
-across KAFKA, HIVE, FLINK for fix versions due to release in the next 30 days, 
-that have been in progress for more than 45 days without resolution, 
-are not linked to any design or specification issue, 
-have no fix version release date set, 
-and are assigned to someone who has not updated the issue in over 5 days — 
-representing product commitments at highest risk of slipping the roadmap */
-project in (KAFKA, HIVE, FLINK) 
-AND issuetype in (Improvement, "New Feature") 
-AND status = "In Progress" 
-AND created <= -45d 
-AND updated <= -5d 
-AND fixVersion in unreleasedVersions() 
-AND due <= 30d 
-AND issueFunction not in linkedIssuesOf("issuetype in (Specification, Design, Proposal)") 
-AND assignee is not EMPTY 
-ORDER BY due ASC, created ASC, priority DESC
+/* 480. Show all unresolved issues across the entire Apache portfolio that have been open for more than 180 days, are blocker or critical priority, have changed assignee more than once indicating ownership churn, and belong to active fix versions — representing the highest strategic delivery risk */
+project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND created <= -180d AND fixVersion in unreleasedVersions() AND assignee is not EMPTY ORDER BY created ASC, priority DESC, updated ASC
+
+
+/* 481. Show all security-related bugs across KAFKA, HIVE, ZOOKEEPER that have been unresolved for more than 72 hours since creation, are blocker or critical, have no fix version committed, and were not updated in the last 24 hours — indicating unacknowledged security vulnerabilities with no remediation plan */ 
+project in (KAFKA, HIVE, ZOOKEEPER) AND issuetype = Bug AND labels in (security, vulnerability, CVE) AND priority in (Blocker, Critical) AND created <= -3d AND updated <= -1d AND fixVersion is EMPTY AND status not in (Closed, Resolved) ORDER BY created ASC, priority DESC
+
+
+/* 482. Show all epics across KAFKA, HIVE, FLINK that were due in the last 60 days but are still unresolved, have at least one child issue still open, belong to an unreleased fix version, and have not received any update in the last 10 days — representing stalled program-level deliverables that missed their window */ 
+project in (KAFKA, HIVE, FLINK) AND issuetype = Epic AND due >= -60d AND due <= now() AND status not in (Closed, Resolved) AND fixVersion in unreleasedVersions() AND updated <= -10d AND issueFunction in subtasksOf("status not in (Closed, Resolved)") ORDER BY due ASC, updated ASC, priority DESC
+
+
+/* 483. Show all infrastructure and environment related bugs in KAFKA and FLINK that were created during business hours in the last 30 days, are still unresolved, have no assignee, are linked to at least one open incident, and have a severity of critical or blocker — identifying production incidents with no owner that are silently ageing */ 
+project in (KAFKA, FLINK) AND issuetype = Bug AND labels in (infrastructure, environment, devops, incident, production) AND priority in (Blocker, Critical) AND created >= -30d AND created >= startOfDay("-30d") AND assignee is EMPTY AND status not in (Closed, Resolved) AND issueFunction in linkedIssuesOf("issuetype = Incident AND status not in (Closed, Resolved)") ORDER BY created ASC, priority DESC
+
+
+/* 484. Show all issues across KAFKA, HIVE, FLINK, ZOOKEEPER that were resolved in the current quarter but were reopened within 7 days of resolution, are now assigned to a different person than who originally resolved them, and are blocker or critical priority — revealing poor first-time fix rate and ownership handoff problems in the team */ 
+project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND issuetype = Bug AND status = Reopened AND priority in (Blocker, Critical) AND resolutiondate >= startOfYear() AND resolutiondate <= now() AND updated >= -7d AND assignee != reporter ORDER BY resolutiondate ASC, priority DESC, updated DESC
+
+/* 485. Show all new features and improvements committed across KAFKA, HIVE, FLINK for fix versions due to release in the next 30 days, that have been in progress for more than 45 days without resolution, are not linked to any design or specification issue, have no fix version release date set, and are assigned to someone who has not updated the issue in over 5 days — representing product commitments at highest risk of slipping the roadmap */
+project in (KAFKA, HIVE, FLINK) AND issuetype in (Improvement, "New Feature") AND status = "In Progress" AND created <= -45d AND updated <= -5d AND fixVersion in unreleasedVersions() AND due <= 30d AND issueFunction not in linkedIssuesOf("issuetype in (Specification, Design, Proposal)") AND assignee is not EMPTY ORDER BY due ASC, created ASC, priority DESC
 
 
