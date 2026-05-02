@@ -395,7 +395,6 @@ issueFunction in issueFieldMatch("project = PROJ", "Story Points", "^[89]|1[0-3]
 
 
 
-/* issueFunction not in <functionName>("<subquery>") */
 
 /* 126. Issues NOT in any epic that has unresolved stories */
 issueFunction not in epicsOf("resolution IS EMPTY")
@@ -474,7 +473,6 @@ issueFunction not in issueFieldMatch("project = PROJ", "Story Points", "^[89]|1[
 
 
 
-/* issueFunction in linkedIssuesOfRecursive("subquery") */
 
 /* 151. All issues directly/indirectly related to a single critical issue */
 issueFunction in linkedIssuesOfRecursive("issue = PROJ-1000")
@@ -553,7 +551,6 @@ issueFunction in linkedIssuesOfRecursive("project = BACKEND AND resolution IS EM
 
 
 
-/* issueFunction in linkedIssuesOfRecursive("subquery", "link type") */
 
 /* 176. All issues blocked (directly/indirectly) by PROJ-123 */
 issueFunction in linkedIssuesOfRecursive("issue = PROJ-123", "is blocked by")
@@ -635,7 +632,6 @@ issueFunction in linkedIssuesOfRecursive("labels = 'vendor-integration'", "depen
 
 
 
-/* issueFunction in linkedIssuesOfRecursive("subquery", "link type 1", "link type 2") */
 
 /* 202. Issues blocked by or blocking PROJ-500 (both directions) */
 issueFunction in linkedIssuesOfRecursive("issue = PROJ-500", "blocks", "is blocked by")
@@ -711,7 +707,6 @@ issueFunction in linkedIssuesOfRecursive("labels = 'performance'", "relates to",
 
 
 
-/* issueFunction + time/date combinations - dependency functions with time-aware subqueries */
 
 /* 226. Epics containing at least one story created today - today's epic intake view */
 issueFunction in epicsOf("created >= startOfDay() AND issuetype = Story AND resolution = Unresolved") ORDER BY updated DESC
@@ -775,7 +770,6 @@ issueFunction in linkedIssuesOfRecursive("priority CHANGED TO Blocker AFTER star
 
 
 
-/* Sprint functions combined with time - open, closed, future sprints */
 
 /* 246. Unresolved issues in open sprints created this week - new sprint intake this week */
 sprint in openSprints() AND created >= startOfWeek() AND resolution = Unresolved ORDER BY priority ASC, created DESC
@@ -824,7 +818,6 @@ issueFunction in hasSubtasks() AND sprint in openSprints() AND resolution = Unre
 
 
 
-/* Version functions combined with time/date */
 
 /* 261. Unresolved issues in unreleased versions with due dates this month - release month deadline view */
 fixVersion in unreleasedVersions() AND duedate >= startOfMonth() AND duedate <= endOfMonth() AND resolution = Unresolved ORDER BY duedate ASC, priority ASC
@@ -858,7 +851,6 @@ fixVersion in unreleasedVersions() AND sprint in openSprints() AND status = "In 
 
 
 
-/* CHANGED BY / WAS IN / WAS NOT IN with time boundaries */
 
 /* 271. Issues that were In Progress at the start of today - today's carry-in WIP snapshot */
 status WAS "In Progress" ON startOfDay() ORDER BY project ASC, priority ASC
@@ -907,7 +899,6 @@ status CHANGED TO Resolved AFTER startOfDay() BY currentUser() ORDER BY updated 
 
 
 
-/* worklogDate and worklogAuthor queries */
 
 /* 286. Issues that had any time logged today - today's work log activity */
 worklogDate >= startOfDay() ORDER BY updated DESC
@@ -941,7 +932,6 @@ worklogAuthor = currentUser() AND worklogDate >= startOfYear() AND resolution = 
 
 
 
-/* votes and watchers combined with time */
 
 /* 296. Highly voted issues created this month - community-prioritised new issues */
 votes > 5 AND created >= startOfMonth() AND resolution = Unresolved ORDER BY votes DESC, created DESC
@@ -960,7 +950,6 @@ votes > 0 AND created >= startOfWeek() AND priority = Blocker AND resolution = U
 
 
 
-/* linkedIssuesOf (direct, non-recursive) combined with time */
 
 /* 301. Issues directly blocked by issue PROJ-100 */
 issueFunction in linkedIssuesOf("issue = PROJ-100", "blocks") ORDER BY priority ASC
@@ -994,7 +983,6 @@ issueFunction in linkedIssuesOf("created >= startOfMonth() AND issuetype = Bug",
 
 
 
-/* Complex multi-condition queries combining issueFunction, time, sprint, version, and worklog */
 
 /* 311. Epics containing Blocker stories in open sprints, themselves updated this week - active risky epics */
 issueFunction in epicsOf("sprint in openSprints() AND priority = Blocker AND resolution = Unresolved") AND updated >= startOfWeek() ORDER BY updated DESC
@@ -1320,29 +1308,34 @@ project IN (ZOOKEEPER, HIVE) ORDER BY created DESC
 /* 418. Open issues from ZOOKEEPER and HIVE, sorted by project then key */
 project IN (ZOOKEEPER, HIVE) AND resolution IS EMPTY ORDER BY project, key
 
-/* 419. Stories blocked by open bugs in core platform projects */ issueFunction in linkedIssuesOf("project in (HIVE, KAFKA, ZOOKEEPER) AND issuetype = Bug AND status in (\"In Progress\", \"Open\")", "blocks") AND issuetype in (Story, Task) ORDER BY priority DESC, updated DESC
+/* 419. Stories blocked by open bugs in core platform projects */
+issueFunction in linkedIssuesOf("project in (HIVE, KAFKA, ZOOKEEPER) AND issuetype = Bug AND status in (\"In Progress\", \"Open\")", "blocks") AND issuetype in (Story, Task) ORDER BY priority DESC, updated DESC
 
-/* 420. Dependency chain up to 3 levels deep for a given release epic */ issueFunction in linkedIssuesOfRecursiveLimited("issue = HIVE-123 AND issuetype = Epic", 3, "is blocked by") ORDER BY project, issuetype, key
+/* 420. Dependency chain up to 3 levels deep for a given release epic */
+issueFunction in linkedIssuesOfRecursiveLimited("issue = HIVE-123 AND issuetype = Epic", 3, "is blocked by") ORDER BY project, issuetype, key
 
-/* 421. Cross-project dependencies into HIVE from KAFKA and ZOOKEEPER */ project = HIVE AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER) AND statusCategory != Done", "is blocked by") ORDER BY statusCategory, updated DESC
+/* 421. Cross-project dependencies into HIVE from KAFKA and ZOOKEEPER */
+project = HIVE AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER) AND statusCategory != Done", "is blocked by") ORDER BY statusCategory, updated DESC
 
-/* 422. Open issues that block at least one unresolved issue in any of the three projects */ issueFunction in linkedIssuesOf("project in (HIVE, KAFKA, ZOOKEEPER) AND resolution IS EMPTY", "is blocked by") AND resolution IS EMPTY ORDER BY priority DESC, created ASC
+/* 422. Open issues that block at least one unresolved issue in any of the three projects */
+issueFunction in linkedIssuesOf("project in (HIVE, KAFKA, ZOOKEEPER) AND resolution IS EMPTY", "is blocked by") AND resolution IS EMPTY ORDER BY priority DESC, created ASC
 
-/* 423. All issues within 2-link distance of a critical production incident */ issueFunction in linkedIssuesOfRecursiveLimited("issue = KAFKA-999 AND priority = Highest", 2) ORDER BY project, priority DESC, updated DESC
+/* 423. All issues within 2-link distance of a critical production incident */
+issueFunction in linkedIssuesOfRecursiveLimited("issue = KAFKA-999 AND priority = Highest", 2) ORDER BY project, priority DESC, updated DESC
 
 /* 424. Epics/Features that have at least one linked Story/Task/Sub-task */
 issuetype in (Epic, Feature) AND issueFunction in linkedIssuesOf("issuetype in (Story, Task, Sub-task)", "has Epic") ORDER BY updated DESC
 
-/* 425. Stories/Tasks that are not linked to any Epic/Feature (broken hierarchy) */ 
+/* 425. Stories/Tasks that are not linked to any Epic/Feature (broken hierarchy) */
 issuetype in (Story, Task) AND issueFunction not in linkedIssuesOf("issuetype in (Epic, Feature)", "has Epic") ORDER BY created DESC
 
-/* 426. Sub-tasks whose parent Story/Task belongs to a specific Epic/Feature */ 
+/* 426. Sub-tasks whose parent Story/Task belongs to a specific Epic/Feature */
 issuetype = Sub-task AND issueFunction in linkedIssuesOfRecursiveLimited("issue = HIVE-123 AND issuetype in (Epic, Feature)", 2) ORDER BY priority DESC, updated DESC
 
-/* 427. All Stories/Tasks/Sub-tasks under Epics/Features in HIVE, KAFKA, ZOOKEEPER */ 
+/* 427. All Stories/Tasks/Sub-tasks under Epics/Features in HIVE, KAFKA, ZOOKEEPER */
 issuetype in (Story, Task, Sub-task) AND issueFunction in linkedIssuesOfRecursiveLimited("project in (HIVE, KAFKA, ZOOKEEPER) AND issuetype in (Epic, Feature)", 2) ORDER BY project, issuetype, key
 
-/* 428. Epics/Features that have at least one blocked Story/Task/Sub-task */ 
+/* 428. Epics/Features that have at least one blocked Story/Task/Sub-task */
 issuetype in (Epic, Feature) AND issueFunction in linkedIssuesOfRecursiveLimited("issuetype in (Story, Task, Sub-task) AND status in (\"Blocked\", \"On Hold\")", 2) ORDER BY priority DESC, updated DESC
 
 /* 429. Fetch a single issue by its key */
@@ -1394,46 +1387,46 @@ project in (KAFKA, ZOOKEEPER, FLINK) AND issueFunction in linkedIssuesOf("projec
 (project in (KAFKA, ZOOKEEPER, FLINK)) AND issuetype = Bug AND resolution = Fixed  AND issueFunction in linkedIssuesOf("resolution is EMPTY") AND updated >= -30d ORDER BY updated DESC
 
 
-/* 444. Tasks assigned to current user with project links */
+/* 443. Tasks assigned to current user with project links */
 issuetype = Task AND project in (KAFKA, ZOOKEEPER, FLINK) AND issueFunction in linkedIssuesOf("project in (KAFKA, ZOOKEEPER, FLINK)") ORDER BY status, created DESC
 
 
-/* 445. Duplicate issues linked across KAFKA/FLINK projects */
+/* 444. Duplicate issues linked across KAFKA/FLINK projects */
 (project in (KAFKA, FLINK)) AND issueFunction in linkedIssuesOf("project in (KAFKA, FLINK)", duplicates) ORDER BY created DESC
 
 
-/* 446. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a direct issue link of any issue type*/
+/* 445. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a direct issue link of any issue type*/
 project in (KAFKA, HIVE, ZOOKEEPER) AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by")
 
-/* 447. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a at least 1 issue type link or linked issues of any type */
+/* 446. List issues from projects KAFKA, HIVE, or ZOOKEEPER that have a at least 1 issue type link or linked issues of any type */
 project in (KAFKA, HIVE, ZOOKEEPER) AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by")
 
-/* 448. In project KAFKA, find Epics that have linked Stories, and Stories that in turn have linked Tasks or Sub-tasks. Use this as the base set; build Epic → Story → Task/Sub-task link chains in post-processing. */
+/* 447. In project KAFKA, find Epics that have linked Stories, and Stories that in turn have linked Tasks or Sub-tasks. Use this as the base set; build Epic → Story → Task/Sub-task link chains in post-processing. */
 project = KAFKA AND issueLinkType in (  "blocks",  "is blocked by",  "relates to",  "duplicates",  "is duplicated by",  "is cloned by") and issuetype in (Story, Task, Sub-task, Epic)
 
-/* 449. List all closed issues in projects KAFKA and HIVE from Q1 2026 (January–March), sorted by resolution date */
+/* 448. List all closed issues in projects KAFKA and HIVE from Q1 2026 (January–March), sorted by resolution date */
 project in (KAFKA, HIVE)  AND status = Closed  AND resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
 
-/* 450. Bugs in project FLINK fixed in 2025, ordered by resolution date */
+/* 449. Bugs in project FLINK fixed in 2025, ordered by resolution date */
 project = FLINK AND issuetype = Bug AND resolution = Fixed AND resolutiondate >= "2025-01-01" AND resolutiondate <= "2025-12-31" ORDER BY resolutiondate DESC
 
-/* 451. Issues from project KAFKA created in Q1 2025 (Jan–Mar), newest first */
+/* 450. Issues from project KAFKA created in Q1 2025 (Jan–Mar), newest first */
 project = KAFKA AND created >= "2025-01-01" AND created <= "2025-03-31" ORDER BY created DESC
 
-/* 452. Open HIVE issues from 2024 (all four quarters), by project then creation date */
+/* 451. Open HIVE issues from 2024 (all four quarters), by project then creation date */
 project = HIVE AND resolution IS EMPTY AND created >= "2024-01-01" AND created <= "2024-12-31" ORDER BY project, created ASC
 
-/* 453. List all issues resolved in projects KAFKA and HIVE in 2026 quarter 1 */
+/* 452. List all issues resolved in projects KAFKA and HIVE in 2026 quarter 1 */
 project in (KAFKA, HIVE)  AND status = Closed  AND resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
 
 
-/* 454. List all issues resolved or closed or solved or done or fixed in projects KAFKA and HIVE in 2026 quarter 1 */
+/* 453. List all issues resolved or closed or solved or done or fixed in projects KAFKA and HIVE in 2026 quarter 1 */
 project in (KAFKA, HIVE)  and resolution in (Resolved, Fixed) OR resolutiondate >= "2026-01-01"  AND resolutiondate <= "2026-03-31" ORDER BY resolutiondate DESC
 
-/* 455. show the assignee who has solved maximum number of bugs in project kafka */
+/* 454. show the assignee who has solved maximum number of bugs in project kafka */
 project = KAFKA  AND issuetype = Bug  AND status in (Closed, Resolved) ORDER BY assignee ASC
 
-/* 456. show the assignee who has solved maximum number of issues in project kafka */
+/* 455. show the assignee who has solved maximum number of issues in project kafka */
 project = KAFKA AND status in (Closed,Done,Resolved) ORDER BY assignee ASC
 
 /* 456. Show all unresolved blockers in KAFKA with no assignee */
@@ -1469,110 +1462,113 @@ assignee = currentUser() AND due < now() AND status not in (Closed, Resolved) OR
 /* 466. Show all tasks and sub-tasks in HADOOP that are linked to an unresolved bug in HIVE */
 issuetype in (Task, Sub-task) AND project = HADOOP AND issueFunction in linkedIssuesOf("project = HIVE AND issuetype = Bug AND status not in (Closed, Resolved)") ORDER BY created DESC
 
-/* 466. Show all unresolved issues in the current active sprint for KAFKA */
+/* 467. Show all unresolved issues in the current active sprint for KAFKA */
 project = KAFKA AND sprint in openSprints() AND status not in (Closed, Resolved) ORDER BY priority DESC, updated ASC
 
-/* 467. Show all issues that were not completed and carried over from the last sprint to current sprint in KAFKA */
+/* 468. Show all issues that were not completed and carried over from the last sprint to current sprint in KAFKA */
 project = KAFKA AND sprint in closedSprints() AND sprint in openSprints() AND status not in (Closed, Resolved) ORDER BY priority DESC
 
-/* 468. Show all bugs added to the current sprint after it started (mid-sprint additions) in KAFKA and HIVE */
+/* 469. Show all bugs added to the current sprint after it started (mid-sprint additions) in KAFKA and HIVE */
 project in (KAFKA, HIVE) AND issuetype = Bug AND sprint in openSprints() AND created >= sprintStart() ORDER BY created ASC
 
-/* 469. Show all issues completed in the last 3 closed sprints across KAFKA, HIVE, FLINK */
+/* 470. Show all issues completed in the last 3 closed sprints across KAFKA, HIVE, FLINK */
 project in (KAFKA, HIVE, FLINK) AND sprint in closedSprints() AND status in (Closed, Resolved) AND resolutiondate >= -42d ORDER BY resolutiondate DESC
 
-/* 470. Show all critical and blocker issues assigned to current user due before end of current sprint in KAFKA */
+/* 471. Show all critical and blocker issues assigned to current user due before end of current sprint in KAFKA */
 project = KAFKA AND assignee = currentUser() AND priority in (Critical, Blocker) AND sprint in openSprints() AND due <= endOfWeek() AND status not in (Closed, Resolved) ORDER BY priority DESC, due ASC
 
-/* 471. Show all issues that breached SLA by remaining unresolved for more than 30 days after their due date in KAFKA */
+/* 472. Show all issues that breached SLA by remaining unresolved for more than 30 days after their due date in KAFKA */
 project = KAFKA AND due <= -30d AND status not in (Closed, Resolved) ORDER BY due ASC, priority DESC
 
-/* 472. Show month-over-month regression — bugs reopened in KAFKA and HIVE that were previously resolved in the last 6 months */
+/* 473. Show month-over-month regression — bugs reopened in KAFKA and HIVE that were previously resolved in the last 6 months */
 project in (KAFKA, HIVE) AND issuetype = Bug AND status = Reopened AND resolutiondate >= -180d AND resolutiondate <= now() ORDER BY resolutiondate ASC, priority DESC
 
-/* 473. Show all blocker and critical issues in KAFKA that took more than 60 days to resolve in 2025 — identifying long-running bottlenecks */
+/* 474. Show all blocker and critical issues in KAFKA that took more than 60 days to resolve in 2025 — identifying long-running bottlenecks */
 project = KAFKA AND priority in (Blocker, Critical) AND status in (Closed, Resolved) AND created <= "2025-01-01" AND resolutiondate >= "2025-01-01" AND resolutiondate <= "2025-12-31" ORDER BY resolutiondate DESC
 
-/* 474. Show quarterly delivery health — all issues committed to fix version 3.9.0 in KAFKA that missed the release and remain unresolved */
+/* 475. Show quarterly delivery health — all issues committed to fix version 3.9.0 in KAFKA that missed the release and remain unresolved */
 project = KAFKA AND fixVersion = "3.9.0" AND status not in (Closed, Resolved) AND due < now() ORDER BY priority DESC, due ASC
 
-/* 475. Show executive risk summary — all unresolved blockers and criticals across KAFKA, HIVE, FLINK, ZOOKEEPER older than 45 days with no update in the last 7 days indicating stalled delivery */
+/* 476. Show executive risk summary — all unresolved blockers and criticals across KAFKA, HIVE, FLINK, ZOOKEEPER older than 45 days with no update in the last 7 days indicating stalled delivery */
 project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND created <= -45d AND updated <= -7d ORDER BY created ASC, priority DESC
 
-/* 476. Show all bugs that were resolved by developers but not yet verified by QA, sitting unverified for more than 5 days across KAFKA and HIVE — indicating QA pipeline backlog */ 
+/* 477. Show all bugs that were resolved by developers but not yet verified by QA, sitting unverified for more than 5 days across KAFKA and HIVE — indicating QA pipeline backlog */
 project in (KAFKA, HIVE) AND issuetype = Bug AND status = Resolved AND updated <= -5d AND resolution = Fixed AND assignee != currentUser() ORDER BY updated ASC, priority DESC
 
 
-/* 477. Show all issues targeting the next two upcoming fix versions in KAFKA that are still unresolved within 14 days of their due date — flagging release readiness risk */
+/* 478. Show all issues targeting the next two upcoming fix versions in KAFKA that are still unresolved within 14 days of their due date — flagging release readiness risk */
 project = KAFKA AND fixVersion in unreleasedVersions() AND status not in (Closed, Resolved) AND due <= 14d AND due >= now() ORDER BY fixVersion ASC, priority DESC, due ASC
 
-/* 478. Show all issues in the active sprint across KAFKA and FLINK that have not been updated in more than 3 days — identifying blocked or idle work items */
+/* 479. Show all issues in the active sprint across KAFKA and FLINK that have not been updated in more than 3 days — identifying blocked or idle work items */
 project in (KAFKA, FLINK) AND sprint in openSprints() AND updated <= -3d AND status not in (Closed, Resolved) AND assignee is not EMPTY ORDER BY updated ASC, priority DESC
 
-/* 479. Show all issues assigned to me across KAFKA, HIVE, FLINK that are due in the next 7 days, are in progress, and have linked blocking dependencies still unresolved — helping prioritize work with upstream blockers */
+/* 480. Show all issues assigned to me across KAFKA, HIVE, FLINK that are due in the next 7 days, are in progress, and have linked blocking dependencies still unresolved — helping prioritize work with upstream blockers */
 project in (KAFKA, HIVE, FLINK) AND assignee = currentUser() AND status = "In Progress" AND due >= now() AND due <= 7d AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved) AND issueFunction in linkedIssuesOf(\"type = Blocker\")") ORDER BY due ASC, priority DESC
 
 
-/* 480. Show all unresolved issues across the entire Apache portfolio that have been open for more than 180 days, are blocker or critical priority, have changed assignee more than once indicating ownership churn, and belong to active fix versions — representing the highest strategic delivery risk */
+/* 481. Show all unresolved issues across the entire Apache portfolio that have been open for more than 180 days, are blocker or critical priority, have changed assignee more than once indicating ownership churn, and belong to active fix versions — representing the highest strategic delivery risk */
 project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND created <= -180d AND fixVersion in unreleasedVersions() AND assignee is not EMPTY ORDER BY created ASC, priority DESC, updated ASC
 
 
-/* 481. Show all security-related bugs across KAFKA, HIVE, ZOOKEEPER that have been unresolved for more than 72 hours since creation, are blocker or critical, have no fix version committed, and were not updated in the last 24 hours — indicating unacknowledged security vulnerabilities with no remediation plan */ 
+/* 482. Show all security-related bugs across KAFKA, HIVE, ZOOKEEPER that have been unresolved for more than 72 hours since creation, are blocker or critical, have no fix version committed, and were not updated in the last 24 hours — indicating unacknowledged security vulnerabilities with no remediation plan */
 project in (KAFKA, HIVE, ZOOKEEPER) AND issuetype = Bug AND labels in (security, vulnerability, CVE) AND priority in (Blocker, Critical) AND created <= -3d AND updated <= -1d AND fixVersion is EMPTY AND status not in (Closed, Resolved) ORDER BY created ASC, priority DESC
 
 
-/* 482. Show all epics across KAFKA, HIVE, FLINK that were due in the last 60 days but are still unresolved, have at least one child issue still open, belong to an unreleased fix version, and have not received any update in the last 10 days — representing stalled program-level deliverables that missed their window */ 
+/* 483. Show all epics across KAFKA, HIVE, FLINK that were due in the last 60 days but are still unresolved, have at least one child issue still open, belong to an unreleased fix version, and have not received any update in the last 10 days — representing stalled program-level deliverables that missed their window */
 project in (KAFKA, HIVE, FLINK) AND issuetype = Epic AND due >= -60d AND due <= now() AND status not in (Closed, Resolved) AND fixVersion in unreleasedVersions() AND updated <= -10d AND issueFunction in subtasksOf("status not in (Closed, Resolved)") ORDER BY due ASC, updated ASC, priority DESC
 
 
-/* 483. Show all infrastructure and environment related bugs in KAFKA and FLINK that were created during business hours in the last 30 days, are still unresolved, have no assignee, are linked to at least one open incident, and have a severity of critical or blocker — identifying production incidents with no owner that are silently ageing */ 
+/* 484. Show all infrastructure and environment related bugs in KAFKA and FLINK that were created during business hours in the last 30 days, are still unresolved, have no assignee, are linked to at least one open incident, and have a severity of critical or blocker — identifying production incidents with no owner that are silently ageing */
 project in (KAFKA, FLINK) AND issuetype = Bug AND labels in (infrastructure, environment, devops, incident, production) AND priority in (Blocker, Critical) AND created >= -30d AND created >= startOfDay("-30d") AND assignee is EMPTY AND status not in (Closed, Resolved) AND issueFunction in linkedIssuesOf("issuetype = Incident AND status not in (Closed, Resolved)") ORDER BY created ASC, priority DESC
 
 
-/* 484. Show all issues across KAFKA, HIVE, FLINK, ZOOKEEPER that were resolved in the current quarter but were reopened within 7 days of resolution, are now assigned to a different person than who originally resolved them, and are blocker or critical priority — revealing poor first-time fix rate and ownership handoff problems in the team */ 
+/* 485. Show all issues across KAFKA, HIVE, FLINK, ZOOKEEPER that were resolved in the current quarter but were reopened within 7 days of resolution, are now assigned to a different person than who originally resolved them, and are blocker or critical priority — revealing poor first-time fix rate and ownership handoff problems in the team */
 project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND issuetype = Bug AND status = Reopened AND priority in (Blocker, Critical) AND resolutiondate >= startOfYear() AND resolutiondate <= now() AND updated >= -7d AND assignee != reporter ORDER BY resolutiondate ASC, priority DESC, updated DESC
 
-/* 485. Show all new features and improvements committed across KAFKA, HIVE, FLINK for fix versions due to release in the next 30 days, that have been in progress for more than 45 days without resolution, are not linked to any design or specification issue, have no fix version release date set, and are assigned to someone who has not updated the issue in over 5 days — representing product commitments at highest risk of slipping the roadmap */
+/* 486. Show all new features and improvements committed across KAFKA, HIVE, FLINK for fix versions due to release in the next 30 days, that have been in progress for more than 45 days without resolution, are not linked to any design or specification issue, have no fix version release date set, and are assigned to someone who has not updated the issue in over 5 days — representing product commitments at highest risk of slipping the roadmap */
 project in (KAFKA, HIVE, FLINK) AND issuetype in (Improvement, "New Feature") AND status = "In Progress" AND created <= -45d AND updated <= -5d AND fixVersion in unreleasedVersions() AND due <= 30d AND issueFunction not in linkedIssuesOf("issuetype in (Specification, Design, Proposal)") AND assignee is not EMPTY ORDER BY due ASC, created ASC, priority DESC
 
-/* 486. Show issues in KAFKA that were reopened after being resolved — status history shows a transition out of Resolved or Closed back to an open state */
-project = KAFKA AND status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
+/* 487. Show issues in KAFKA that were reopened after being resolved — status history shows a transition out of Resolved or Closed back to an open state */
+status WAS IN (Resolved, Fixed, Closed) AND status NOT IN ('Resolved', 'Fixed', Closed) AND project = KAFKA ORDER BY resolutiondate DESC
 
-/* 487. Show issues in KAFKA whose status was changed from Resolved — directly reopened from Resolved */
+
+/* 488. Show issues in KAFKA whose status was changed from Resolved — directly reopened from Resolved */
 project = KAFKA AND status CHANGED FROM "Resolved" ORDER BY updated DESC
 
-/* 488. Show issues reopened after resolution in KAFKA — was resolved, now in a non-resolved status */
+/* 489. Show issues reopened after resolution in KAFKA — was resolved, now in a non-resolved status */
 project = KAFKA AND status WAS "Resolved" AND status != "Resolved" ORDER BY updated DESC
 
-/* 489. Show bugs in KAFKA that were resolved and then reopened, indicating regression or incomplete fix */
+/* 490. Show bugs in KAFKA that were resolved and then reopened, indicating regression or incomplete fix */
 project = KAFKA AND issuetype = Bug AND status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
 
-/* 490. Show all issues across projects that were previously resolved or closed but are now open again — reopened issues */
+/* 491. Show all issues across projects that were previously resolved or closed but are now open again — reopened issues */
 status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
 
-/* 491. Show issues that bounced back from Resolved — were resolved at some point and are now reopened */
+/* 492. Show issues that bounced back from Resolved — were resolved at some point and are now reopened */
 status WAS "Resolved" AND status != "Resolved" ORDER BY project ASC, updated DESC
 
 
-/* 489. Show all issues across HIVE, HADOOP, KAFKA, FLINK, ZOOKEEPER that have been reopened at least once and are currently in reopened status — baseline query to identify chronic re-opening patterns */ 
+/* 493. Show all issues across HIVE, HADOOP, KAFKA, FLINK, ZOOKEEPER that have been reopened at least once and are currently in reopened status — baseline query to identify chronic re-opening patterns */
 project in (HIVE, HADOOP, KAFKA, FLINK, ZOOKEEPER) AND status = Reopened AND resolutiondate is not EMPTY ORDER BY updated ASC, priority DESC
 
-/* 490. Show all critical and blocker bugs across HIVE and HADOOP that are currently reopened, have no fix version committed, and have not been updated in more than 5 days — identifying the most neglected chronically failing issues */
+/* 494. Show all critical and blocker bugs across HIVE and HADOOP that are currently reopened, have no fix version committed, and have not been updated in more than 5 days — identifying the most neglected chronically failing issues */
 project in (HIVE, HADOOP) AND issuetype = Bug AND status = Reopened AND priority in (Blocker, Critical) AND resolutiondate is not EMPTY AND fixVersion is EMPTY AND updated <= -5d ORDER BY updated ASC, priority DESC
 
-/* 491. Multi-dimensional risk surface query Surfaces issues that are simultaneously: old, stalled, high priority, owned by nobody, committed to an upcoming release, and have open dependencies. */
+/* 495. Multi-dimensional risk surface query Surfaces issues that are simultaneously: old, stalled, high priority, owned by nobody, committed to an upcoming release, and have open dependencies. */
 project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved, "In Progress") AND created <= -90d AND updated <= -14d AND assignee is EMPTY AND fixVersion in unreleasedVersions() AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved)") ORDER BY created ASC, priority DESC, updated ASC
 
-/* 492. Release integrity and ship-readiness scorecard Combines fix version targeting, issue age, assignee health, unresolved blockers, missing QA verification, and stale updates into a single release risk fingerprint.  This is the query a Release Manager needs 2 weeks before a release. */
+/* 496. Release integrity and ship-readiness scorecard Combines fix version targeting, issue age, assignee health, unresolved blockers, missing QA verification, and stale updates into a single release risk fingerprint.  This is the query a Release Manager needs 2 weeks before a release. */
 project = KAFKA AND fixVersion in unreleasedVersions() AND status not in (Closed, Resolved) AND ( (priority in (Blocker, Critical) AND updated <= -3d) OR (assignee is EMPTY AND created <= -14d) OR (issuetype = Bug AND status = Reopened AND resolutiondate is not EMPTY) OR (due <= 14d AND due >= now() AND status not in ("In Progress", Closed, Resolved))) ORDER BY priority DESC, due ASC, updated ASC
 
-/* 493. Contributor ownership churn and chronic failure detector Identifies issues that have: been reopened after resolution, changed hands (assignee != reporter), stalled with no update, carry high priority, span multiple projects, and have no committed fix version — the exact fingerprint of a ticket nobody wants to own.  Requires understanding of Jira status lifecycle, ownership semantics, and multi-project health simultaneously. */
+/* 497. Contributor ownership churn and chronic failure detector Identifies issues that have: been reopened after resolution, changed hands (assignee != reporter), stalled with no update, carry high priority, span multiple projects, and have no committed fix version — the exact fingerprint of a ticket nobody wants to own.  Requires understanding of Jira status lifecycle, ownership semantics, and multi-project health simultaneously. */
 project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND issuetype = Bug AND status = Reopened AND assignee != reporter AND assignee is not EMPTY AND resolutiondate is not EMPTY AND updated <= -7d AND fixVersion is EMPTY AND priority in (Blocker, Critical, Major) AND created <= -60d ORDER BY created ASC, updated ASC, priority DESC
 
-/* 494. Cross-portfolio quarterly delivery risk fingerprint Surfaces every project simultaneously breaching: age thresholds, priority SLAs, release commitments, ownership gaps, and update cadence. */
+/* 498. Cross-portfolio quarterly delivery risk fingerprint Surfaces every project simultaneously breaching: age thresholds, priority SLAs, release commitments, ownership gaps, and update cadence. */
 project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND fixVersion in unreleasedVersions() AND created <= -45d AND updated <= -7d AND assignee is EMPTY AND resolutiondate is EMPTY AND issueFunction in linkedIssuesOf("priority in (Blocker, Critical) AND status not in (Closed, Resolved)") ORDER BY project ASC, priority DESC, created ASC
 
 
-/* 495. Engineering waste and rework cost surface Identifies every issue that consumed multiple resolution attempts, changed ownership at least once, carries high priority, and is STILL not fixed — quantifying rework waste for finance.  */
+/* 499. Engineering waste and rework cost surface Identifies every issue that consumed multiple resolution attempts, changed ownership at least once, carries high priority, and is STILL not fixed — quantifying rework waste for finance.  */
 project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND issuetype in (Bug, Improvement) AND status = Reopened AND assignee != reporter AND assignee is not EMPTY AND resolutiondate is not EMPTY AND priority in (Blocker, Critical, Major) AND created <= -30d AND updated <= -5d AND fixVersion is EMPTY AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved) AND priority in (Blocker, Critical)") ORDER BY created ASC, priority DESC, updated ASC
 
+/* 500. Show all issues in project KAFKA that are resolved or closed */
+status in (Fixed, Closed, Resolved) or resolution in(Fixed, Resolved) and project in (Kafka)

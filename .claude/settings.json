@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run python -m pytest tests/test_jql_embeddings.py::test_annotation_file_pair_count_matches_last_annotation_number -v -s",
+            "if": "Edit(*jira_jql_annotated_queries*)|Write(*jira_jql_annotated_queries*)",
+            "shell": "powershell",
+            "statusMessage": "Checking annotation file integrity...",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
