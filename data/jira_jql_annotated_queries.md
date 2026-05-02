@@ -1572,3 +1572,21 @@ project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND issuetype in (Bug, Improv
 
 /* 500. Show all issues in project KAFKA that are resolved or closed */
 status in (Fixed, Closed, Resolved) or resolution in(Fixed, Resolved) and project in (Kafka)
+
+/* 501. Find all issues in project KAFKA that have links of any kind — showing which tickets have cross-references to other issues */
+project = KAFKA AND issueFunction in hasLinks()
+
+/* 502. Show issues that have atleast 1 linked issues in project HIVE , HADOOP*/
+project in (HIVE, HADOOP) AND issueFunction in hasLinks()
+
+/* 503. Find all issues in project HADOOP that have blockers */
+project = HADOOP AND issueLinkType = "is blocked by"
+
+/* 504. Find all issues in project HADOOP that are related to by any other issue*/
+project = HADOOP AND issueLinkType = "is related to"
+
+/* 505. Find all issues in project KAFKA that are depended upon by any other issue*/
+project = KAFKA AND issueLinkType = "is depended upon by"
+
+/* 506. Find all issues in project HADOOP that has issuelinktype contains */
+project = HADOOP AND issueLinkType = "contains"
