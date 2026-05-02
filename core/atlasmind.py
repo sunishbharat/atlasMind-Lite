@@ -806,12 +806,40 @@ class AtlasMind:
 
                     error_fields = _extract_error_fields(exc_str)
                     _accumulated_before = len(accumulated_prompt)
+
+                    # For each unknown field, look up the closest valid Jira field
+                    # via the already-seeded field embeddings and log the suggestion.
+                    field_suggestions: dict[str, tuple[str, str]] = {}
+                    for ef in error_fields:
+                        suggestion = self.jira_field_embeddings.find_similar_field_name(
+                            ef, self.document_processor._model
+                        )
+                        if suggestion:
+                            field_id, canonical_name = suggestion
+                            logger.info(
+                                "  retry[%d] Closest field to '%s': field_id=%s, name='%s'",
+                                retry_num, ef, field_id, canonical_name,
+                            )
+                            field_suggestions[ef] = (field_id, canonical_name)
+                        else:
+                            logger.info(
+                                "  retry[%d] No close field found for '%s' in field embeddings",
+                                retry_num, ef,
+                            )
+
                     if len(error_fields) == 1:
-                        logger.warning("  retry[%d] Bad field: %s — using targeted retry prompt", retry_num, error_fields[0])
+                        bad_field = error_fields[0]
+                        logger.warning("  retry[%d] Bad field: %s — using targeted retry prompt", retry_num, bad_field)
                         retry_prompt = accumulated_prompt + JQL_RETRY_FIELD_TEMPLATE.format(
-                            field=error_fields[0],
+                            field=bad_field,
                             bad_jql=current_jql,
                         )
+                        if bad_field in field_suggestions:
+                            fid, fname = field_suggestions[bad_field]
+                            retry_prompt += (
+                                f"\nClosest valid field to '{bad_field}': field_id='{fid}', display name='{fname}'."
+                                f" Use it only if it matches the query intent."
+                            )
                     elif error_fields:
                         fields_str = ", ".join(f"'{f}'" for f in error_fields)
                         logger.warning("  retry[%d] Bad fields: %s — using multi-field retry prompt", retry_num, fields_str)
@@ -819,6 +847,12 @@ class AtlasMind:
                             fields=fields_str,
                             bad_jql=current_jql,
                         )
+                        if field_suggestions:
+                            hints = "; ".join(
+                                f"'{ef}' → field_id='{fid}', display name='{fname}'"
+                                for ef, (fid, fname) in field_suggestions.items()
+                            )
+                            retry_prompt += f"\nClosest valid fields: {hints}. Use only if they match the query intent."
                     else:
                         retry_prompt = accumulated_prompt + JQL_RETRY_TEMPLATE.format(
                             bad_jql=current_jql,

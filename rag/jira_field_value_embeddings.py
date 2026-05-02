@@ -29,6 +29,7 @@ from settings import (
     EMBEDDING_BATCH_SIZE,
     JIRA_FIELD_VALUES_TABLE,
     JIRA_FIELD_VALUES_COL_EMBEDDING,
+    MAX_VALUES_FOR_EMBEDDING,
     VALUE_HINT_MAX_CANDIDATES,
     VALUE_PROMPT_MAX_CANDIDATES,
 )
@@ -123,7 +124,7 @@ class JiraFieldValueEmbeddings:
             source_file:    Path to the allowed values JSON file (hash-gating key).
         """
         setup_metadata_table(self.pgConfig)
-        seed_key = str(source_file) + _SEED_KEY_SUFFIX
+        seed_key = str(source_file) + _SEED_KEY_SUFFIX + f"::cap{MAX_VALUES_FOR_EMBEDDING}"
         current_hash = compute_file_hash(source_file)
         stored = get_stored_hash(self.pgConfig, seed_key)
         if stored == current_hash:
@@ -266,14 +267,29 @@ class JiraFieldValueEmbeddings:
         allowed_values: dict[str, list[str]],
         id_to_name: dict[str, str],
     ) -> list[FieldValueRecord]:
-        """Flatten allowed_values into one FieldValueRecord per (field_id, value) pair."""
+        """Flatten allowed_values into one FieldValueRecord per (field_id, value) pair.
+
+        High-cardinality fields (versions, components, labels) are capped at
+        MAX_VALUES_FOR_EMBEDDING. Exact-match correction is unaffected — the
+        sanitizer's in-memory _normed dict holds all values regardless of this cap.
+        """
         records: list[FieldValueRecord] = []
+        skipped_fields = 0
         for field_id, values in allowed_values.items():
             field_name = id_to_name.get(field_id, field_id)
-            for value in values:
+            capped = values[:MAX_VALUES_FOR_EMBEDDING]
+            if len(values) > MAX_VALUES_FOR_EMBEDDING:
+                skipped_fields += 1
+            for value in capped:
                 records.append(FieldValueRecord(
                     field_id=field_id,
                     field_name=field_name,
                     value=value,
                 ))
+        if skipped_fields:
+            logger.info(
+                "jira_field_values: capped %d high-cardinality field(s) to %d values each "
+                "(exact-match correction unaffected — in-memory dict holds all values).",
+                skipped_fields, MAX_VALUES_FOR_EMBEDDING,
+            )
         return records
