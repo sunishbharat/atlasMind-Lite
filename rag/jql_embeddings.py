@@ -188,7 +188,7 @@ class JQL_Embeddings:
 
         logger.info("File loaded: %d characters", len(text))
 
-        pattern = re.compile(r'/\*\s*(.*?)\s*\*/[\r\n]+(?!/\*)([^\r\n]+)', re.DOTALL)
+        pattern = re.compile(r'/\*\s*(.*?)\s*\*/[ \t]*[\r\n]+(?!/\*)([^\r\n]+)', re.DOTALL)
         pairs: list[dict[str, str]] = [
             {"comment": m.group(1).strip(), "jql": m.group(2).strip()}
             for m in pattern.finditer(text)
