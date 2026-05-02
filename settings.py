@@ -71,7 +71,7 @@ BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "500"))
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")
 EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-EMBEDDING_BATCH_SIZE = 32
+EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "256"))
 
 # -- JQL Embeddings DB schema ---------------------------------------------------------
 JQL_TABLE            = "jql_annotations"
@@ -102,6 +102,13 @@ VALUE_PROMPT_MAX_CANDIDATES     = int(os.getenv("VALUE_PROMPT_MAX_CANDIDATES", "
 # inflates the RAG prompt massively. The full list is stored separately in the
 # allowed_values column for JQL validation; this cap only affects the LLM context.
 MAX_ALLOWED_VALUES_IN_DESC   = int(os.getenv("MAX_ALLOWED_VALUES_IN_DESC", "20"))
+
+# Maximum number of allowed values to embed per field in the jira_field_values table.
+# The sanitizer uses exact match (in-memory dict, all values) for casing correction —
+# embeddings are only needed for misspelling/similarity correction and RAG prompt hints.
+# Fields with ≤ this count are fully embedded; high-cardinality fields (versions,
+# components) are capped so the embedding table stays small and seeding stays fast.
+MAX_VALUES_FOR_EMBEDDING     = int(os.getenv("MAX_VALUES_FOR_EMBEDDING", "50"))
 
 # Field IDs to exclude from embedding regardless of type.
 # Add custom fields that are internal, deprecated, or irrelevant to JQL queries.

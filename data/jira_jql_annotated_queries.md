@@ -1535,4 +1535,44 @@ project in (KAFKA, HIVE, FLINK, ZOOKEEPER) AND issuetype = Bug AND status = Reop
 /* 485. Show all new features and improvements committed across KAFKA, HIVE, FLINK for fix versions due to release in the next 30 days, that have been in progress for more than 45 days without resolution, are not linked to any design or specification issue, have no fix version release date set, and are assigned to someone who has not updated the issue in over 5 days — representing product commitments at highest risk of slipping the roadmap */
 project in (KAFKA, HIVE, FLINK) AND issuetype in (Improvement, "New Feature") AND status = "In Progress" AND created <= -45d AND updated <= -5d AND fixVersion in unreleasedVersions() AND due <= 30d AND issueFunction not in linkedIssuesOf("issuetype in (Specification, Design, Proposal)") AND assignee is not EMPTY ORDER BY due ASC, created ASC, priority DESC
 
+/* 486. Show issues in KAFKA that were reopened after being resolved — status history shows a transition out of Resolved or Closed back to an open state */
+project = KAFKA AND status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
+
+/* 487. Show issues in KAFKA whose status was changed from Resolved — directly reopened from Resolved */
+project = KAFKA AND status CHANGED FROM "Resolved" ORDER BY updated DESC
+
+/* 488. Show issues reopened after resolution in KAFKA — was resolved, now in a non-resolved status */
+project = KAFKA AND status WAS "Resolved" AND status != "Resolved" ORDER BY updated DESC
+
+/* 489. Show bugs in KAFKA that were resolved and then reopened, indicating regression or incomplete fix */
+project = KAFKA AND issuetype = Bug AND status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
+
+/* 490. Show all issues across projects that were previously resolved or closed but are now open again — reopened issues */
+status WAS IN (Resolved, Closed) AND status NOT IN (Resolved, Closed) ORDER BY updated DESC
+
+/* 491. Show issues that bounced back from Resolved — were resolved at some point and are now reopened */
+status WAS "Resolved" AND status != "Resolved" ORDER BY project ASC, updated DESC
+
+
+/* 489. Show all issues across HIVE, HADOOP, KAFKA, FLINK, ZOOKEEPER that have been reopened at least once and are currently in reopened status — baseline query to identify chronic re-opening patterns */ 
+project in (HIVE, HADOOP, KAFKA, FLINK, ZOOKEEPER) AND status = Reopened AND resolutiondate is not EMPTY ORDER BY updated ASC, priority DESC
+
+/* 490. Show all critical and blocker bugs across HIVE and HADOOP that are currently reopened, have no fix version committed, and have not been updated in more than 5 days — identifying the most neglected chronically failing issues */
+project in (HIVE, HADOOP) AND issuetype = Bug AND status = Reopened AND priority in (Blocker, Critical) AND resolutiondate is not EMPTY AND fixVersion is EMPTY AND updated <= -5d ORDER BY updated ASC, priority DESC
+
+/* 491. Multi-dimensional risk surface query Surfaces issues that are simultaneously: old, stalled, high priority, owned by nobody, committed to an upcoming release, and have open dependencies. */
+project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved, "In Progress") AND created <= -90d AND updated <= -14d AND assignee is EMPTY AND fixVersion in unreleasedVersions() AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved)") ORDER BY created ASC, priority DESC, updated ASC
+
+/* 492. Release integrity and ship-readiness scorecard Combines fix version targeting, issue age, assignee health, unresolved blockers, missing QA verification, and stale updates into a single release risk fingerprint.  This is the query a Release Manager needs 2 weeks before a release. */
+project = KAFKA AND fixVersion in unreleasedVersions() AND status not in (Closed, Resolved) AND ( (priority in (Blocker, Critical) AND updated <= -3d) OR (assignee is EMPTY AND created <= -14d) OR (issuetype = Bug AND status = Reopened AND resolutiondate is not EMPTY) OR (due <= 14d AND due >= now() AND status not in ("In Progress", Closed, Resolved))) ORDER BY priority DESC, due ASC, updated ASC
+
+/* 493. Contributor ownership churn and chronic failure detector Identifies issues that have: been reopened after resolution, changed hands (assignee != reporter), stalled with no update, carry high priority, span multiple projects, and have no committed fix version — the exact fingerprint of a ticket nobody wants to own.  Requires understanding of Jira status lifecycle, ownership semantics, and multi-project health simultaneously. */
+project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND issuetype = Bug AND status = Reopened AND assignee != reporter AND assignee is not EMPTY AND resolutiondate is not EMPTY AND updated <= -7d AND fixVersion is EMPTY AND priority in (Blocker, Critical, Major) AND created <= -60d ORDER BY created ASC, updated ASC, priority DESC
+
+/* 494. Cross-portfolio quarterly delivery risk fingerprint Surfaces every project simultaneously breaching: age thresholds, priority SLAs, release commitments, ownership gaps, and update cadence. */
+project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND priority in (Blocker, Critical) AND status not in (Closed, Resolved) AND fixVersion in unreleasedVersions() AND created <= -45d AND updated <= -7d AND assignee is EMPTY AND resolutiondate is EMPTY AND issueFunction in linkedIssuesOf("priority in (Blocker, Critical) AND status not in (Closed, Resolved)") ORDER BY project ASC, priority DESC, created ASC
+
+
+/* 495. Engineering waste and rework cost surface Identifies every issue that consumed multiple resolution attempts, changed ownership at least once, carries high priority, and is STILL not fixed — quantifying rework waste for finance.  */
+project in (KAFKA, HIVE, HADOOP, FLINK, ZOOKEEPER) AND issuetype in (Bug, Improvement) AND status = Reopened AND assignee != reporter AND assignee is not EMPTY AND resolutiondate is not EMPTY AND priority in (Blocker, Critical, Major) AND created <= -30d AND updated <= -5d AND fixVersion is EMPTY AND issueFunction in linkedIssuesOf("status not in (Closed, Resolved) AND priority in (Blocker, Critical)") ORDER BY created ASC, priority DESC, updated ASC
 

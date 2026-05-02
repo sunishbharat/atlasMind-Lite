@@ -40,6 +40,8 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `VALUE_HINT_THRESHOLD` | `0.40` | Cosine distance threshold for JQL value correction — bad values within this distance of a known allowed value are flagged |
 | `VALUE_HINT_MAX_CANDIDATES` | `3` | Maximum candidate values surfaced per field for JQL sanitizer corrections |
 | `VALUE_PROMPT_MAX_CANDIDATES` | `3` | Maximum candidate values injected into the retry prompt as hints for the LLM |
+| `EMBEDDING_BATCH_SIZE` | `256` | Batch size for SentenceTransformer encoding during seeding — higher values reduce seeding time on CPU/GPU |
+| `MAX_VALUES_FOR_EMBEDDING` | `50` | Maximum allowed values embedded per field in `jira_field_values`. High-cardinality fields (versions, components) are capped here; the in-memory exact-match dict always holds all values so casing correction is unaffected |
 | `VLLM_URL` | — | vLLM server base URL (e.g. `http://100.x.x.x:8002`) |
 | `VLLM_TIMEOUT` | `240` | Read timeout in seconds for vLLM inference |
 | `VLLM_MAX_TOKENS` | — | Max tokens for vLLM responses |
@@ -187,7 +189,7 @@ Overrides work across all LLM backends (Ollama, Groq, vLLM, Claude, Bedrock).
 
 Both seeding steps are hash-gated — re-encoding is skipped if the source files have not changed since the last run.
 
-A third vector table (`jira_field_values`) stores one embedding per `(field_id, allowed_value)` pair. It is seeded from the `jira_allowed_values.json` file at startup and used by the `JqlSanitizer` for pure-DB value correction — no LLM call, no token cost.
+A third vector table (`jira_field_values`) stores one embedding per `(field_id, allowed_value)` pair. It is seeded from the `jira_allowed_values.json` file at startup and used by the `JqlSanitizer` for pure-DB value correction — no LLM call, no token cost. High-cardinality fields are capped at `MAX_VALUES_FOR_EMBEDDING` values (default 50) to keep seeding fast; the full value list is still held in-memory for exact-match correction. The seed key encodes the cap value (`::cap50`) so changing `MAX_VALUES_FOR_EMBEDDING` automatically triggers a re-seed on next startup without any manual DB intervention.
 
 **Jira fields are stored per domain** under `data/{domain_slug}/` (e.g. `data/issues_apache_org/jira_fields.json`). Switching the active profile in `config/profiles.json` automatically uses the correct set of files for that Jira instance.
 

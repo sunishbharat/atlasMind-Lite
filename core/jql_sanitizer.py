@@ -26,6 +26,7 @@ All passes are deterministic — no LLM call, zero token cost.
 
 import logging
 import re
+from collections.abc import Callable
 
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
@@ -60,6 +61,16 @@ _JQL_FIELD_ARITH_COND_RE = re.compile(
     r"|"
     r"\w+\s*[-+]\s*\w+\s*(?:>=?|<=?|!=?)\s*\d+[a-zA-Z]+"
     r")",
+    re.IGNORECASE,
+)
+# Jira date fields that cannot appear as RHS values in comparisons.
+_JIRA_DATE_FIELDS = (
+    r"resolutiondate|resolved|created|updated|duedate|due|lastViewed"
+)
+# Matches AND <any_field> <op> <date_field> — field-to-field date comparison
+# that Jira always rejects with "Date value 'X' for field 'Y' is invalid".
+_JQL_FIELD_DATE_COMPARE_RE = re.compile(
+    rf"\s+AND\s+\w+\s*(?:>=?|<=?|!=?|=)\s*(?:{_JIRA_DATE_FIELDS})\b",
     re.IGNORECASE,
 )
 # Matches AND field = 'value' or AND field != 'value'.
@@ -196,6 +207,16 @@ class JqlSanitizer:
         stripped = _JQL_FIELD_ARITH_COND_RE.sub("", jql).strip()
         if stripped != jql:
             logger.warning("JQL: field-to-field date arithmetic in WHERE stripped: %s", jql)
+        jql = stripped
+
+        # Pass 5a — strip plain field-to-field date comparisons (e.g. created <= resolutiondate).
+        # Jira rejects these with "Date value '<field>' for field '<field>' is invalid".
+        stripped = _JQL_FIELD_DATE_COMPARE_RE.sub("", jql).strip()
+        if stripped != jql:
+            logger.warning(
+                "JQL: field-to-field date comparison stripped (use status WAS/CHANGED instead): %s",
+                jql,
+            )
         jql = stripped
 
         # Pass 6 — dequote purely numeric values (e.g. Sprint in ('224') → Sprint in (224)).
