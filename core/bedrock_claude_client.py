@@ -76,10 +76,8 @@ class BedrockClaudeClient:
             )
             if system_text:
                 kwargs["system"] = [
-                    {
-                        "text": system_text,
-                        "cachePoint": {"type": "default"},
-                    }
+                    { "text": system_text },
+                    {"cachePoint": {}},
                 ]
             response = client.converse(**kwargs)
             return response["output"]["message"]["content"][0]["text"]
