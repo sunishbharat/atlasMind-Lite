@@ -555,6 +555,7 @@ class AtlasMind:
         extra_field_ids: list[str] | None = None,
         jira_token: str | None = None,
         jira_url: str | None = None,
+        jira_type_override: str | None = None,
     ) -> dict:
         """Execute a JQL query against the active Jira instance with automatic pagination.
 
@@ -588,11 +589,16 @@ class AtlasMind:
             self.standard_field_ids, extra_field_ids
         ) if self.field_resolver else ",".join(self.standard_field_ids)
 
+        effective_jira_type = jira_type_override or profile.jira_type
+        effective_search_path = None if jira_type_override else profile.search_path
+        if jira_type_override:
+            logger.info("Jira type override in effect: %s (profile default: %s)", jira_type_override, profile.jira_type)
+
         client = JiraSearchClient()
         jql_error = await client.validate_jql(
             jql, base_url, auth, auth_headers,
-            jira_type=profile.jira_type,
-            search_path=profile.search_path,
+            jira_type=effective_jira_type,
+            search_path=effective_search_path,
         )
         if jql_error:
             logger.warning("JQL validation failed: %s | JQL: %s", jql_error, jql)
@@ -605,15 +611,15 @@ class AtlasMind:
                 fields=all_fields,
                 max_results=max_results,
                 base_url=base_url,
-                jira_type=profile.jira_type,
-                search_path=profile.search_path,
+                jira_type=effective_jira_type,
+                search_path=effective_search_path,
                 auth=auth,
                 auth_headers=auth_headers,
             )
         )
-        return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched}
+        return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched, "jira_type": effective_jira_type}
 
-    async def _handle_raw_query(self, route: RouteResult, jira_token: str | None = None, jira_url: str | None = None) -> tuple[JqlResponse, dict]:
+    async def _handle_raw_query(self, route: RouteResult, jira_token: str | None = None, jira_url: str | None = None, jira_type_override: str | None = None) -> tuple[JqlResponse, dict]:
         """Execute a user-supplied JQL string directly, bypassing RAG and LLM generation.
 
         Only the LIMIT clause is stripped (unsupported by the Jira REST API).
@@ -642,6 +648,7 @@ class AtlasMind:
             max_results=_parse_limit(route.chart_hint or ""),
             jira_token=jira_token,
             jira_url=jira_url,
+            jira_type_override=jira_type_override,
         )
         jira_result["resolved_intent_fields"] = ResolvedIntentFields()
 
@@ -670,7 +677,7 @@ class AtlasMind:
         route = await self.router.route(query)
 
         if route.is_raw:
-            return await self._handle_raw_query(route, jira_token=jira_token, jira_url=jira_url)
+            return await self._handle_raw_query(route, jira_token=jira_token, jira_url=jira_url, jira_type_override=route.jira_type_override)
 
         if not route.is_jql:
             logger.info("*** AI answer: %s", route.answer)
@@ -731,6 +738,7 @@ class AtlasMind:
                         extra_field_ids=combined_extra or None,
                         jira_token=jira_token,
                         jira_url=jira_url,
+                        jira_type_override=route.jira_type_override,
                     )
                     break
                 except ValueError as exc:
@@ -744,8 +752,11 @@ class AtlasMind:
 
                     exc_str = str(exc)
 
-                    # Network errors cannot be fixed by the LLM — fail immediately.
+                    # Errors the LLM cannot fix — fail immediately without retrying.
                     if "Jira connection failed" in exc_str:
+                        raise
+                    if "Jira redirect" in exc_str:
+                        # 302 → login page: wrong endpoint or missing auth; JQL is irrelevant.
                         raise
 
                     # Invalid field values: strip offending conditions deterministically,

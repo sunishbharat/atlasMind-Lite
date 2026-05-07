@@ -10,6 +10,7 @@ falling back to the jira_type default from config/jira_config.py.
 
 import logging
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
@@ -97,6 +98,9 @@ class JiraSearchClient:
                 response.raise_for_status()
             return None
         except httpx.HTTPStatusError as exc:
+            if exc.response.is_redirect:
+                location = unquote(exc.response.headers.get("location", ""))
+                return f"Jira redirect ({exc.response.status_code}) to {location} — wrong endpoint or authentication required"
             try:
                 body = exc.response.json()
                 messages = body.get("errorMessages", [])
@@ -238,6 +242,9 @@ class JiraSearchClient:
 
 
 def _parse_jira_error(exc: httpx.HTTPStatusError) -> str:
+    if exc.response.is_redirect:
+        location = exc.response.headers.get("location", "")
+        return f"Jira redirect ({exc.response.status_code}) to {location} — wrong endpoint or authentication required"
     try:
         body = exc.response.json()
         messages = body.get("errorMessages", [])

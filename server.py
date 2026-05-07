@@ -101,6 +101,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
     profile = load_active_jira_profile()
     profile_name = profile.name
     jira_base_url = profile.jira_url
+    jira_type = (jira_result.get("jira_type") if jira_result else None) or str(profile.jira_type)
 
     chart_spec = None
     if llm_result.chart_spec:
@@ -114,6 +115,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
             type="general",
             profile=profile_name,
             jira_base_url=jira_base_url,
+            jira_type=jira_type,
             answer=llm_result.answer or "No response generated. Please try rephrasing your query.",
             chart_spec=chart_spec,
             meta=_server_meta,
@@ -154,6 +156,7 @@ def _build_response(llm_result, jira_result: dict | None) -> QueryResponse:
         type="jql",
         profile=profile_name,
         jira_base_url=jira_base_url,
+        jira_type=jira_type,
         answer=answer,
         jql=jira_result.get("jql"),
         total=total,

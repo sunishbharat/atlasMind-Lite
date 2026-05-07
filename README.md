@@ -146,14 +146,23 @@ curl -X POST http://localhost:8000/query \
 
 ## Routing overrides
 
-The query router automatically classifies each query as JQL or general. If the router misclassifies a query, you can force the route by appending a flag:
+The query router automatically classifies each query as JQL or general. If the router misclassifies a query, or you need to control which Jira search API is used, append a flag to your query:
 
 | Flag | Effect |
 |------|--------|
 | `/jql` | Forces the JQL pipeline regardless of LLM classification |
 | `/general` | Forces the general answer path, skipping the JQL pipeline |
+| `/cloud` | Forces `POST /rest/api/3/search/jql` (Jira Cloud API) for this request |
+| `/server` | Forces `GET /rest/api/2/search` (Jira Server API) for this request |
 
-The flag is stripped from the query before it is sent to the LLM, so it does not affect the generated JQL or answer.
+All flags are stripped from the query before it is sent to the LLM, so they do not affect the generated JQL or answer.
+
+`/cloud` and `/server` override the search method and path for the current request only — they do not switch the active profile or change the Jira base URL. Use them when the active profile's `jira_type` is correct but you need to temporarily force a different API version. Flags can be combined:
+
+```
+[atlasmind]> list open issues in KAFKA /cloud
+[atlasmind]> project = KAFKA AND status = Open /raw /cloud
+```
 
 **Examples:**
 
@@ -231,18 +240,42 @@ Edit `config/profiles.json` to configure your Jira instance:
       "jira_url": "https://issues.apache.org/jira",
       "email": "",
       "token": "",
-      "jira_type": "server"
+      "jira_type": "server",
+      "search_path": ""
     },
     "personal": {
       "jira_url": "https://myorg.atlassian.net",
       "email": "me@example.com",
-      "token": "my-api-token"
+      "token": "",
+      "jira_type": "cloud",
+      "search_path": ""
     }
   }
 }
 ```
 
 Change `"default"` to switch the active instance. Jira fields are auto-fetched and stored in `data/{domain_slug}/` on first run.
+
+### `jira_type`
+
+Controls the Jira search API used for every query:
+
+| `jira_type` | Method | Endpoint | Pagination |
+|-------------|--------|----------|------------|
+| `cloud` | `POST` | `/rest/api/3/search/jql` | Cursor (`nextPageToken`) |
+| `server` | `GET` | `/rest/api/2/search` | Offset (`startAt`) |
+
+Defaults to `cloud` when omitted.
+
+### `search_path`
+
+Optional override for the search endpoint path. Leave empty to use the default for `jira_type`. Set this to change the search path without rebuilding or redeploying — useful if the Jira API version changes:
+
+```json
+"search_path": "/rest/api/4/search/jql"
+```
+
+When `search_path` is set, it overrides the default path but `jira_type` still determines the HTTP method and pagination strategy (`cloud` → POST + cursor, `server` → GET + offset).
 
 ### Per-request auth headers
 
@@ -264,6 +297,7 @@ class QueryResponse(BaseModel):
     type:           str                        # "jql" or "general"
     profile:        str                        # active Jira profile name
     jira_base_url:  str
+    jira_type:      str | None                 # effective search API: "cloud" or "server"
     answer:         str | None
     jql:            str | None                 # None for general queries
     total:          int                        # total matching issues in Jira
@@ -275,6 +309,8 @@ class QueryResponse(BaseModel):
     meta:           ServerMeta | None          # model name, backend, timeout
     token_usage:    TokenUsage | None          # prompt token estimates for this query
 ```
+
+`jira_type` reflects the search API actually used for this response — either the profile default or the per-request `/cloud`/`/server` override. The UI can use this to display which Jira API version was active, or to adapt behaviour for cloud vs server responses.
 
 `TokenUsage` breaks down prompt size per query:
 

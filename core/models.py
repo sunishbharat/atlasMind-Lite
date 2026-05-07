@@ -10,8 +10,9 @@ class RouteResult(BaseModel):
     """Result of query routing — determines which pipeline handles the request."""
     type: Literal["jql", "general", "raw"]
     answer: str = ""
-    raw_jql: str = ""     # type="raw": literal JQL text left of /raw
-    chart_hint: str = ""  # type="raw": chart instruction right of /raw
+    raw_jql: str = ""              # type="raw": literal JQL text left of /raw
+    chart_hint: str = ""           # type="raw": chart instruction right of /raw
+    jira_type_override: str | None = None  # /cloud or /server flag: overrides profile jira_type
 
     @property
     def is_jql(self) -> bool:
@@ -76,6 +77,7 @@ class QueryResponse(BaseModel):
     type:           str
     profile:        str
     jira_base_url:  str
+    jira_type:      Optional[str]              = None
     answer:         Optional[str]              = None
     jql:            Optional[str]              = None
     total:          int                        = 0

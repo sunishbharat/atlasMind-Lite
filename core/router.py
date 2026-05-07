@@ -36,6 +36,9 @@ _OVERRIDE_JQL_RE     = re.compile(r"\s*/jql\b",     re.IGNORECASE)
 _OVERRIDE_GENERAL_RE = re.compile(r"\s*/general\b", re.IGNORECASE)
 # /raw splits the query: JQL is left of the flag, optional chart hint is right
 _OVERRIDE_RAW_RE     = re.compile(r"\s*/raw\b(.*)$", re.IGNORECASE)
+# /cloud and /server override the Jira search endpoint for this request only
+_OVERRIDE_CLOUD_RE   = re.compile(r"\s*/cloud\b",   re.IGNORECASE)
+_OVERRIDE_SERVER_RE  = re.compile(r"\s*/server\b",  re.IGNORECASE)
 
 
 class QueryRouter:
@@ -55,18 +58,28 @@ class QueryRouter:
         self._two_pass = two_pass
         logger.info("QueryRouter loaded prompt from %s (two_pass=%s)", prompt_file, two_pass)
 
-    def _check_override(self, query: str) -> tuple[str | None, str]:
-        """Return (forced_type, clean_query). forced_type is 'jql', 'general', 'raw', or None.
+    def _check_override(self, query: str) -> tuple[str | None, str, str | None]:
+        """Return (forced_type, clean_query, jira_type_override).
 
+        forced_type is 'jql', 'general', 'raw', or None.
+        jira_type_override is 'cloud', 'server', or None.
         For 'raw', clean_query is the original query unchanged — call _parse_raw() separately.
         """
+        jira_type_override: str | None = None
+        if _OVERRIDE_CLOUD_RE.search(query):
+            jira_type_override = "cloud"
+            query = _OVERRIDE_CLOUD_RE.sub("", query).strip()
+        elif _OVERRIDE_SERVER_RE.search(query):
+            jira_type_override = "server"
+            query = _OVERRIDE_SERVER_RE.sub("", query).strip()
+
         if _OVERRIDE_RAW_RE.search(query):
-            return "raw", query
+            return "raw", query, jira_type_override
         if _OVERRIDE_JQL_RE.search(query):
-            return "jql", _OVERRIDE_JQL_RE.sub("", query).strip()
+            return "jql", _OVERRIDE_JQL_RE.sub("", query).strip(), jira_type_override
         if _OVERRIDE_GENERAL_RE.search(query):
-            return "general", _OVERRIDE_GENERAL_RE.sub("", query).strip()
-        return None, query
+            return "general", _OVERRIDE_GENERAL_RE.sub("", query).strip(), jira_type_override
+        return None, query, jira_type_override
 
     def _parse_raw(self, query: str) -> RouteResult:
         """Split query on /raw into (jql, chart_hint) and return a raw RouteResult."""
@@ -81,14 +94,18 @@ class QueryRouter:
 
     async def route(self, query: str) -> RouteResult:
         """Classify query and return a typed RouteResult."""
-        forced_type, clean_query = self._check_override(query)
+        forced_type, clean_query, jira_type_override = self._check_override(query)
+
+        if jira_type_override:
+            logger.info("QueryRouter: Jira type override → %s", jira_type_override)
 
         if forced_type == "raw":
-            return self._parse_raw(query)
+            result = self._parse_raw(clean_query)
+            return result.model_copy(update={"jira_type_override": jira_type_override})
 
         if forced_type == "jql":
             logger.info("QueryRouter: user override → JQL")
-            return RouteResult(type="jql")
+            return RouteResult(type="jql", jira_type_override=jira_type_override)
 
         prompt = self._prompt_template.format(query=clean_query)
         logger.info("QueryRouter: classifying query")
@@ -98,13 +115,13 @@ class QueryRouter:
 
         if _JQL_SIGNAL_RE.match(response) and not _GENERAL_SIGNAL_RE.match(response):
             logger.info("QueryRouter: routed to JQL pipeline")
-            return RouteResult(type="jql")
+            return RouteResult(type="jql", jira_type_override=jira_type_override)
 
         logger.info("QueryRouter: routed to general answer (skipping RAG)")
 
         if forced_type == "general" or self._two_pass:
             answer_prompt = f"Answer the following question briefly and accurately:\n\n{clean_query}"
             answer = await self._llm_client.generate_jql(answer_prompt)
-            return RouteResult(type="general", answer=answer.strip())
+            return RouteResult(type="general", answer=answer.strip(), jira_type_override=jira_type_override)
 
-        return RouteResult(type="general", answer=response)
+        return RouteResult(type="general", answer=response, jira_type_override=jira_type_override)
