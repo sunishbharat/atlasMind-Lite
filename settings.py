@@ -96,6 +96,10 @@ VALUE_HINT_THRESHOLD            = float(os.getenv("VALUE_HINT_THRESHOLD", "0.40"
 VALUE_HINT_MAX_CANDIDATES       = int(os.getenv("VALUE_HINT_MAX_CANDIDATES", "3"))
 # Top-N query-relevant values injected into the RAG prompt before LLM generation.
 VALUE_PROMPT_MAX_CANDIDATES     = int(os.getenv("VALUE_PROMPT_MAX_CANDIDATES", "3"))
+# Cross-field value search: L2 distance threshold for suggesting the correct field
+# when a value is rejected by Jira for the field the LLM used.
+# Tighter than VALUE_HINT_THRESHOLD to avoid false positives across all fields.
+VALUE_FIELD_SUGGEST_THRESHOLD   = float(os.getenv("VALUE_FIELD_SUGGEST_THRESHOLD", "0.20"))
 
 # Maximum number of allowed values to embed per field description.
 # Fields like version or status can have hundreds of values — including all of them

@@ -188,6 +188,39 @@ def _strip_field_conditions(jql: str, fields: list[str]) -> str:
     return result.strip()
 
 
+def _find_field_rewrite_hint(
+    vval: str,
+    vfield: str,
+    retry_num: int,
+    field_value_embeddings,
+    model,
+) -> str | None:
+    """Search all fields for vval, excluding vfield, and return an LLM rewrite hint.
+
+    Called when Jira rejects a value for the field the LLM used. If the value
+    belongs to a different field, returns a prompt hint instructing the LLM to
+    rewrite the condition with the correct field. Returns None when no match is found.
+    """
+    if not field_value_embeddings:
+        return None
+    matches = field_value_embeddings.find_field_for_value(
+        vval, model, exclude_field_id=vfield.lower()
+    )
+    if matches:
+        best = matches[0]
+        logger.info(
+            "  retry[%d] Value %r not in '%s' but found in field '%s' (id=%s, dist=%.3f)",
+            retry_num, vval, vfield, best.field_name, best.field_id, best.distance,
+        )
+        return (
+            f"Value '{vval}' is not valid for field '{vfield}'. "
+            f"It is a valid value for field '{best.field_name}' (field_id='{best.field_id}'). "
+            f"Rewrite the condition as: \"{best.field_name}\" = '{best.value}'"
+        )
+    logger.info(
+        "  retry[%d] Value %r: no matching field found across all fields", retry_num, vval
+    )
+    return None
 
 
 
@@ -759,15 +792,45 @@ class AtlasMind:
                         # 302 → login page: wrong endpoint or missing auth; JQL is irrelevant.
                         raise
 
-                    # Invalid field values: strip offending conditions deterministically,
-                    # no LLM call needed — the LLM has no knowledge of valid allowed values.
+                    # Invalid field values: strip offending conditions, then check whether
+                    # the bad value belongs to a different field — if so, give the LLM a
+                    # concrete rewrite hint instead of just dropping the condition silently.
                     value_errors = _extract_value_errors(exc_str)
                     if value_errors:
+                        field_rewrite_hints: list[str] = []
                         for vfield, vval in value_errors:
                             logger.warning("  retry[%d] Invalid value %r for field %r — stripping condition", retry_num, vval, vfield)
+                            hint = _find_field_rewrite_hint(
+                                vval, vfield, retry_num,
+                                self.field_value_embeddings,
+                                self.document_processor._model,
+                            )
+                            if hint:
+                                field_rewrite_hints.append(hint)
+
                         current_jql = _strip_field_conditions(current_jql, [f for f, _ in value_errors])
                         logger.info("  retry[%d] JQL after value strip: %s", retry_num, current_jql)
-                        continue
+
+                        # Guard: if stripping removed every WHERE condition the query would
+                        # return all issues — abort rather than executing a runaway query.
+                        jql_where_only = re.sub(r"\s*ORDER\s+BY\b.*$", "", current_jql, flags=re.IGNORECASE).strip()
+                        if not jql_where_only:
+                            logger.warning("  retry[%d] All conditions stripped — aborting to prevent runaway query", retry_num)
+                            err = ValueError(
+                                "All JQL conditions were invalid and had to be removed. "
+                                "Please refine your query with valid field values."
+                            )
+                            err.token_usage = token_usage  # type: ignore[attr-defined]
+                            raise err
+
+                        if not field_rewrite_hints:
+                            # No field suggestion — stripped JQL is best we can do; skip LLM call.
+                            continue
+
+                        # Inject field-rewrite hints and let LLM rewrite the condition correctly.
+                        hint_block = "\n".join(field_rewrite_hints)
+                        accumulated_prompt += f"\n\nField correction:\n{hint_block}"
+                        logger.info("  retry[%d] Injecting %d field-rewrite hint(s) into retry prompt", retry_num, len(field_rewrite_hints))
 
                     # Unsupported operator on field (e.g. comment IS NOT EMPTY, comment ~ ''):
                     # JQL limitation — the LLM cannot fix this; rewrite or strip deterministically.

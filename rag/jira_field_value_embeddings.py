@@ -32,6 +32,7 @@ from settings import (
     MAX_VALUES_FOR_EMBEDDING,
     VALUE_HINT_MAX_CANDIDATES,
     VALUE_PROMPT_MAX_CANDIDATES,
+    VALUE_FIELD_SUGGEST_THRESHOLD,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,14 @@ class FieldValueRecord(BaseModel):
 
 class SimilarValue(BaseModel):
     """A candidate value returned by cosine similarity search."""
+    value: str
+    distance: float
+
+
+class FieldValueMatch(BaseModel):
+    """Best field match from a cross-field value search."""
+    field_id: str
+    field_name: str
     value: str
     distance: float
 
@@ -260,6 +269,68 @@ class JiraFieldValueEmbeddings:
                 field_id,
                 [(r.value, round(r.distance, 3)) for r in results],
             )
+        return results
+
+    def find_field_for_value(
+        self,
+        value: str,
+        model: SentenceTransformer,
+        exclude_field_id: str | None = None,
+        top_n: int = 3,
+        threshold: float = VALUE_FIELD_SUGGEST_THRESHOLD,
+    ) -> list[FieldValueMatch]:
+        """Search all fields for a value and return the closest matches.
+
+        Used when Jira rejects a value for a given field — this finds which
+        other field actually owns that value so the LLM can rewrite the condition.
+
+        Args:
+            value:            The bad value from the rejected JQL condition.
+            model:            SentenceTransformer — same model used at seeding.
+            exclude_field_id: The field Jira rejected — excluded from results.
+            top_n:            Maximum candidates to return before threshold filter.
+            threshold:        Maximum L2 distance to include a result.
+
+        Returns:
+            List of FieldValueMatch ordered by distance ascending, filtered to
+            those within threshold. Empty when no close match is found.
+        """
+        embedding = model.encode(value, normalize_embeddings=True)
+        if exclude_field_id:
+            sql = f"""
+                SELECT field_id, field_name, value,
+                       {JIRA_FIELD_VALUES_COL_EMBEDDING} <-> %s::vector AS distance
+                FROM {JIRA_FIELD_VALUES_TABLE}
+                WHERE field_id != %s
+                ORDER BY distance
+                LIMIT %s;
+            """
+            params = (embedding.tolist(), exclude_field_id.lower(), top_n)
+        else:
+            sql = f"""
+                SELECT field_id, field_name, value,
+                       {JIRA_FIELD_VALUES_COL_EMBEDDING} <-> %s::vector AS distance
+                FROM {JIRA_FIELD_VALUES_TABLE}
+                ORDER BY distance
+                LIMIT %s;
+            """
+            params = (embedding.tolist(), top_n)
+
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+
+        results = [
+            FieldValueMatch(field_id=row[0], field_name=row[1], value=row[2], distance=row[3])
+            for row in rows
+            if row[3] <= threshold
+        ]
+        logger.debug(
+            "jira_field_values: cross-field search for %r (exclude=%r) → %s",
+            value, exclude_field_id,
+            [(r.field_id, r.value, round(r.distance, 3)) for r in results],
+        )
         return results
 
     @staticmethod
