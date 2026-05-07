@@ -200,6 +200,8 @@ Both seeding steps are hash-gated — re-encoding is skipped if the source files
 
 A third vector table (`jira_field_values`) stores one embedding per `(field_id, allowed_value)` pair. It is seeded from the `jira_allowed_values.json` file at startup and used by the `JqlSanitizer` for pure-DB value correction — no LLM call, no token cost. High-cardinality fields are capped at `MAX_VALUES_FOR_EMBEDDING` values (default 50) to keep seeding fast; the full value list is still held in-memory for exact-match correction. The seed key encodes the cap value (`::cap50`) so changing `MAX_VALUES_FOR_EMBEDDING` automatically triggers a re-seed on next startup without any manual DB intervention.
 
+A fourth vector table (`jira_asset_values`) stores one embedding per `(field_id, label)` pair for Jira Assets (formerly Insight) object fields. Asset object labels (e.g. `"Sample Domain (ABCD-1234)"`) come from a different API than standard Jira field options and are stored in a dedicated table. At prompt-assembly time, the closest asset labels to the user query are injected as value hints so the LLM generates the exact label string on the first pass. Asset fields are optional — if `jira_assets.json` is absent or the Assets API is unreachable, the server starts normally without asset hints; an error is logged but startup is never blocked.
+
 **Jira fields are stored per domain** under `data/{domain_slug}/` (e.g. `data/issues_apache_org/jira_fields.json`). Switching the active profile in `config/profiles.json` automatically uses the correct set of files for that Jira instance.
 
 **Key files:**
@@ -220,8 +222,10 @@ A third vector table (`jira_field_values`) stores one embedding per `(field_id, 
 | `rag/jql_embeddings.py` | Seeds and searches the JQL annotation pgvector table |
 | `rag/jira_field_embeddings.py` | Seeds and searches the Jira field metadata pgvector table; `find_similar_field_name()` provides embedding fallback for unknown intent field names |
 | `rag/jira_field_value_embeddings.py` | Seeds and searches the `jira_field_values` pgvector table — one embedding per `(field_id, allowed_value)` pair; used by `JqlSanitizer` for value correction without LLM calls |
+| `rag/jira_asset_embeddings.py` | Seeds and searches the `jira_asset_values` pgvector table — one embedding per `(field_id, label)` pair for Jira Assets object fields; used to inject query-ranked asset labels as value hints before LLM generation |
 | `core/jql_sanitizer.py` | Deterministic JQL pre-execution corrections: strips invalid field values, rewrites unsupported operators, injects value-hint candidates into retry prompts |
 | `jira/jira_field_api.py` | Fetches field metadata and allowed values from the Jira REST API |
+| `jira/jira_assets_api.py` | Fetches Jira Assets object labels via the Assets AQL API; `list_asset_fields()` prints detected Insight/Assets custom fields from the cached `jira_fields.json` |
 | `seed_manager.py` | MD5 hash-based seeding gate stored in a `seed_metadata` pgvector table |
 | `config/profiles.json` | Jira connection profiles (URL, credentials); `default` key selects the active one |
 | `config/system_prompt.md` | JQL-only system prompt (general answers handled by router) |
@@ -288,6 +292,71 @@ Frontends can override credentials per request using HTTP headers — no server 
 
 Both headers are optional. When absent, the active profile values are used as fallback.
 
+## Jira Assets (optional)
+
+If your Jira instance uses the Assets module (formerly Insight), AtlasMind automatically detects Assets-type fields, fetches their object labels, and embeds them so the LLM generates the correct `aqlFunction` JQL pattern instead of guessing a raw value.
+
+For example, a user query like _"show issues in domain Sample Domain"_ generates:
+
+```
+"Domain" IN aqlFunction('Name = "Sample Domain"')
+```
+
+instead of the incorrect `domain = "Sample Domain"` that a plain LLM would produce.
+
+### How it works
+
+At startup, AtlasMind:
+
+1. Reads `jira_fields.json` (already on disk after the first run) and detects every field whose `schema.custom` starts with `com.atlassian.jira.plugins.cmdb:` — the definitive Jira Assets indicator.
+2. Fetches all object labels for each detected field from the Jira Assets AQL API (`GET /rest/assets/1.0/object/aql`).
+3. Writes the results to `data/<hostname>/jira_assets.json` and seeds the `jira_asset_values` pgvector table.
+4. On subsequent startups, re-fetch is skipped if `jira_fields.json` has not changed (hash-gated).
+
+No manual configuration is required. A log line confirms the load:
+
+```
+INFO  Detected 1 Assets field(s): customfield_10200
+INFO  Asset fields loaded: 1 field(s) — customfield_10200
+```
+
+If the Assets API is unreachable, the server starts normally without asset hints and logs an error — startup is never blocked.
+
+### Forcing a refresh
+
+Run this after bulk changes to asset objects in Jira (bypasses the hash gate):
+
+```bash
+uv run python -c "
+import asyncio
+from jira.jira_assets_api import refresh_asset_values
+asyncio.run(refresh_asset_values())
+"
+```
+
+### Overriding the object type name
+
+By default, AtlasMind uses the field display name as the AQL object type (e.g. field named "Domain" → `objectType = "Domain"`). This covers most cases. When the display name differs from the AQL object type, add an override to `config/jira_assets_fields.json`:
+
+```json
+{
+    "customfield_10200": {
+        "display_name": "Domain",
+        "object_type": "CustomerDomain"
+    }
+}
+```
+
+Entries in this file take precedence over auto-detected values. If no override file exists, auto-detection runs without it.
+
+### Discovering asset field IDs
+
+```bash
+uv run python -c "from jira.jira_assets_api import list_asset_fields; list_asset_fields()"
+```
+
+Prints all Assets-type fields detected in `jira_fields.json` with their field IDs and schema keys.
+
 ## Response model
 
 The `/query` endpoint returns a `QueryResponse` Pydantic model:
@@ -346,6 +415,14 @@ priority = High AND created >= startOfWeek() ORDER BY created DESC
 ### Jira fields (`data/{domain_slug}/jira_fields.json`)
 
 Fetched automatically on first run from `/rest/api/2/field`. Keyed by field ID. A companion `jira_allowed_values.json` is also fetched and merged in to enrich descriptions with discrete option lists (e.g. status values, issue types).
+
+### Jira Assets override config (`config/jira_assets_fields.json`)
+
+Optional. Use only when the AQL object type name differs from the field display name. Auto-detection covers the common case; entries here take precedence over auto-detected values. See the [Jira Assets](#jira-assets-optional) section.
+
+### Jira Assets cache (`data/{domain_slug}/jira_assets.json`)
+
+Written automatically at startup by the Assets auto-detect flow. Contains all object labels per detected asset field. Re-run `refresh_asset_values()` whenever asset objects change in Jira — the server detects the hash change and re-seeds the `jira_asset_values` table on next startup.
 
 ## Running vLLM on a GPU system (GPU inference server)
 

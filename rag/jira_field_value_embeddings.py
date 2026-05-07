@@ -99,7 +99,7 @@ class JiraFieldValueEmbeddings:
 
     def setup_table(self) -> None:
         """Create the jira_field_values table and field_id index if they do not exist."""
-        dim = self.documentProc._model.get_sentence_embedding_dimension()
+        dim = self.documentProc._model.get_embedding_dimension()
         with PGVectorClient(self.pgConfig) as pgclient:
             with pgclient.cursor() as cur:
                 cur.execute(f"""

@@ -51,7 +51,7 @@ class Jira_Field_Embeddings:
         # Reuse an existing DocumentProcessor (and its loaded SentenceTransformer)
         # when one is passed in — avoids loading the same model a second time.
         self.documentProc = document_processor if document_processor else DocumentProcessor(embedconfig=self.config)
-        self.embedding_dim = self.documentProc._model.get_sentence_embedding_dimension()
+        self.embedding_dim = self.documentProc._model.get_embedding_dimension()
         self.pgConfig = self.get_pgConfig_env()
         logger.info(f"Jira field Embedding dimension: {self.embedding_dim}")
 
@@ -102,9 +102,14 @@ class Jira_Field_Embeddings:
                         allowed_values        JSONB,                -- e.g. ["To Do", "In Progress", "Done"]
                         {JIRA_FIELD_COL_DESCRIPTION}  TEXT NOT NULL,
                         is_custom             BOOLEAN DEFAULT FALSE,
+                        is_asset_field        BOOLEAN DEFAULT FALSE,
                         {JIRA_FIELD_COL_EMBEDDING}   vector({embedding_dim}),
                         created_at   TIMESTAMPTZ DEFAULT now()
                     );
+                """)
+                cur.execute(f"""
+                    ALTER TABLE {JIRA_FIELD_TABLE}
+                        ADD COLUMN IF NOT EXISTS is_asset_field BOOLEAN DEFAULT FALSE;
                 """)
 
     def _ensure_extension(self) -> None:
@@ -228,6 +233,30 @@ class Jira_Field_Embeddings:
             "fetch_allowed_values: %d fields with discrete options loaded from vector DB",
             len(result),
         )
+        return result
+
+    def fetch_asset_field_ids(self) -> set[str]:
+        """Return the set of field IDs marked is_asset_field=TRUE in the vector DB.
+
+        Used at startup to populate AtlasMind.asset_field_ids so _build_prompt
+        routes value hint lookups to jira_asset_values instead of jira_field_values.
+
+        Returns:
+            Set of field IDs whose schema.custom starts with the Jira Assets
+            plugin prefix ('com.atlassian.jira.plugins.cmdb:').
+        """
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(
+                    f"SELECT DISTINCT field_id FROM {JIRA_FIELD_TABLE} WHERE is_asset_field = TRUE;"
+                )
+                rows = cur.fetchall()
+        result = {row[0] for row in rows}
+        if result:
+            logger.info(
+                "fetch_asset_field_ids: %d Assets field(s): %s",
+                len(result), ", ".join(sorted(result)),
+            )
         return result
 
     async def search_jira_fields(
@@ -469,6 +498,7 @@ class Jira_Field_Embeddings:
             schema: dict = field.get("schema") or {}
             field_type: str = schema.get("type", "unknown")
             is_custom: bool = bool(field.get("custom", False))
+            is_asset_field: bool = schema.get("custom", "").startswith("com.atlassian.jira.plugins.cmdb:")
             clause_names: list[str] = field.get("clauseNames", [field_id])
 
             # Skip fields explicitly listed in the ignore set
@@ -494,6 +524,7 @@ class Jira_Field_Embeddings:
                     name, field_id, field_type, is_custom, clause_names, allowed
                 ),
                 "is_custom": is_custom,
+                "is_asset_field": is_asset_field,
             })
 
         logger.info("Parsed %d Jira fields from %s (%d skipped)", len(records), fields_path.name, skipped)
@@ -548,8 +579,9 @@ class Jira_Field_Embeddings:
                         f"""
                         INSERT INTO {JIRA_FIELD_TABLE}
                             (project_key, field_id, field_name, field_type,
-                             allowed_values, {JIRA_FIELD_COL_DESCRIPTION}, is_custom, {JIRA_FIELD_COL_EMBEDDING})
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                             allowed_values, {JIRA_FIELD_COL_DESCRIPTION}, is_custom, is_asset_field,
+                             {JIRA_FIELD_COL_EMBEDDING})
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
                         """,
                         (
                             record["project_key"],
@@ -559,6 +591,7 @@ class Jira_Field_Embeddings:
                             PgJson(record["allowed_values"]) if record["allowed_values"] is not None else None,
                             record["description"],
                             record["is_custom"],
+                            record.get("is_asset_field", False),
                             emb.tolist(),
                         ),
                     )

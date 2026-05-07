@@ -130,6 +130,12 @@ DATA_DIR = _ROOT / "data"
 # -- File names — change here to rename files project-wide ------------
 JIRA_FIELDS_FILENAME         = "jira_fields.json"
 JIRA_ALLOWED_VALUES_FILENAME = "jira_allowed_values.json"
+JIRA_ASSETS_FILENAME         = "jira_assets.json"
+JIRA_ASSETS_CONFIG_FILE      = str(_ROOT / "config" / "jira_assets_fields.json")
+
+# -- Jira Asset value embeddings (one row per asset object label per field) ----------
+JIRA_ASSET_VALUES_TABLE         = "jira_asset_values"
+JIRA_ASSET_VALUES_COL_EMBEDDING = "embedding"
 SYSTEM_PROMPT_FILE              = str(_ROOT / "config" / "system_prompt.md")
 ROUTER_PROMPT_FILE              = str(_ROOT / "config" / "router_prompt.md")
 ROUTER_PROMPT_FILE_OLLAMA       = str(_ROOT / "config" / "router_prompt_ollama.md")

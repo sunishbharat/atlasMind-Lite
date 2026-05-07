@@ -22,12 +22,17 @@ from core.models import JqlResponse, RouteResult, TokenUsage
 from dconfig import EmbeddingsConfig
 from config.jira_config import get_data_dir, load_active_jira_profile
 from jira.jira_compute import enrich_issue
+from jira.jira_assets_api import detect_asset_fields, fetch_labels_for_config, load_asset_data
 from jira.jira_search import JiraSearchClient, JiraSearchRequest
+from rag.jira_asset_embeddings import JiraAssetEmbeddings
 from rag.jira_field_value_embeddings import JiraFieldValueEmbeddings
+from rag.seed_manager import compute_file_hash, get_stored_hash, save_hash, setup_metadata_table
 from settings import (
     CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
     JIRA_ALLOWED_VALUES_FILENAME,
+    JIRA_ASSETS_CONFIG_FILE,
+    JIRA_ASSETS_FILENAME,
     JIRA_FIELDS_FILENAME,
     JQL_MAX_ATTEMPTS,
     JQL_RETRY_FIELD_TEMPLATE,
@@ -398,6 +403,11 @@ class AtlasMind:
         # Populated in run() — None until startup completes.
         self.jql_sanitizer: JqlSanitizer | None = None
         self.field_value_embeddings: JiraFieldValueEmbeddings | None = None
+        self.asset_embeddings: JiraAssetEmbeddings | None = None
+        # Field IDs whose values come from Jira Assets (not standard field options).
+        # Populated in run() from jira_assets.json. Used to route value hint lookups
+        # to the dedicated jira_asset_values table in _build_prompt().
+        self.asset_field_ids: set[str] = set()
 
         self._init_llm_backend(llm_backend)
         self.document_processor = DocumentProcessor(embedconfig=embedconfig)
@@ -441,6 +451,7 @@ class AtlasMind:
         # Build FieldResolver from DB mappings — single query covers both
         # intent field name resolution and field ID validation.
         name_to_id, id_to_name = self.jira_field_embeddings.fetch_field_mappings()
+        self.asset_field_ids = self.jira_field_embeddings.fetch_asset_field_ids()
         self.field_resolver = FieldResolver.from_db_mappings(
             name_to_id, id_to_name, max_intent_fields=MAX_INTENT_FIELDS,
             fuzzy_field_fn=lambda name: self.jira_field_embeddings.find_similar_field_name(
@@ -461,6 +472,53 @@ class AtlasMind:
         self.field_value_embeddings = JiraFieldValueEmbeddings(self.embedconfig, self.document_processor)
         self.field_value_embeddings.setup_table()
         self.field_value_embeddings.seed(self.allowed_values, id_to_name, av_file)
+
+        # Auto-detect Jira Assets fields from jira_fields.json, fetch object labels,
+        # seed the jira_asset_values table, and merge labels into allowed_values.
+        # Assets are optional — failures are logged but never crash startup.
+        try:
+            auto_detected = detect_asset_fields(fields_file)
+
+            override_file = Path(JIRA_ASSETS_CONFIG_FILE)
+            if override_file.exists():
+                overrides: dict = json.loads(override_file.read_text(encoding="utf-8"))
+                auto_detected.update(overrides)
+
+            assets_file = get_data_dir(profile.jira_url) / JIRA_ASSETS_FILENAME
+            self.asset_embeddings = JiraAssetEmbeddings(self.embedconfig, self.document_processor)
+            self.asset_embeddings.setup_table()
+
+            if auto_detected:
+                setup_metadata_table(self.asset_embeddings.pgConfig)
+                seed_key = str(fields_file) + "::asset_auto_detect"
+                current_hash = compute_file_hash(fields_file)
+                if get_stored_hash(self.asset_embeddings.pgConfig, seed_key) != current_hash:
+                    logger.info("Assets fields may have changed — re-fetching labels from Jira...")
+                    credential = profile.resolve_auth()
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        executor.submit(
+                            asyncio.run,
+                            fetch_labels_for_config(
+                                auto_detected, assets_file,
+                                profile.jira_url, credential.auth, credential.headers,
+                            )
+                        ).result()
+                    save_hash(self.asset_embeddings.pgConfig, seed_key, current_hash)
+                else:
+                    logger.info("Assets fields unchanged — skipping re-fetch from Jira.")
+
+            self.asset_embeddings.seed(assets_file)
+            _, asset_allowed = load_asset_data(assets_file)
+            self.allowed_values.update(asset_allowed)
+        except Exception as exc:
+            logger.error(
+                "Failed to load asset fields — asset value hints disabled for this session. Error: %s",
+                exc,
+                exc_info=True,
+            )
+            self.asset_embeddings = None
+            self.asset_field_ids = set()
 
         self.jql_sanitizer = JqlSanitizer(
             name_to_id=name_to_id,
@@ -511,13 +569,28 @@ class AtlasMind:
         if self.field_value_embeddings:
             for row in jira_fields:
                 field_id = row[1]
-                if field_id in self.allowed_values:
+                # Asset fields use a dedicated table — skip here to avoid
+                # searching jira_field_values for labels that aren't stored there.
+                if field_id in self.allowed_values and field_id not in self.asset_field_ids:
                     similar = self.field_value_embeddings.find_similar_values_by_embedding(
                         field_id=field_id,
                         query_embedding=query_emb,
                     )
                     if similar:
                         value_hints[field_id] = [s.value for s in similar]
+
+        if self.asset_embeddings and self.asset_field_ids:
+            for row in jira_fields:
+                field_id = row[1]
+                if field_id in self.asset_field_ids:
+                    similar = self.asset_embeddings.find_similar_values_by_embedding(
+                        field_id=field_id,
+                        query_embedding=query_emb,
+                    )
+                    if similar:
+                        value_hints[field_id] = [
+                            f"aqlFunction('Name = \"{s.object_name}\"')" for s in similar
+                        ]
 
         if value_hints:
             logger.info(
