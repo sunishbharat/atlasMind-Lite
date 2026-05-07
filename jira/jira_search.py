@@ -1,9 +1,11 @@
 """
-Paginated Jira search client for /rest/api/2/search.
+Paginated Jira search client.
 
-Jira's REST API hard-caps a single response at 1000 issues. JiraSearchClient
-loops over pages using startAt until max_results issues are fetched or the
-result set is exhausted.
+Server: GET /rest/api/2/search — offset pagination via startAt.
+Cloud:  POST /rest/api/3/search/jql — cursor pagination via nextPageToken.
+
+The active path is resolved from the profile's optional search_path override,
+falling back to the jira_type default from config/jira_config.py.
 """
 
 import logging
@@ -11,6 +13,8 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
+
+from config.jira_config import get_search_path
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ class JiraSearchRequest(BaseModel):
     fields: str
     max_results: int = Field(default=10, ge=1)
     base_url: str
+    jira_type: str = "server"
+    search_path: str | None = None
     auth: tuple[str, str] | None = None
     auth_headers: dict[str, str] = Field(default_factory=dict)
 
@@ -32,12 +38,16 @@ class JiraSearchRequest(BaseModel):
         self.base_url = self.base_url.rstrip("/")
         return self
 
+    def resolved_search_path(self) -> str:
+        return self.search_path or get_search_path(self.jira_type)
+
 
 class JiraPage(BaseModel):
     issues: list[dict[str, Any]]
     total: int
     start_at: int
     max_results: int
+    next_page_token: str | None = None
 
 
 class JiraSearchResult(BaseModel):
@@ -56,20 +66,34 @@ class JiraSearchClient:
         base_url: str,
         auth: tuple[str, str] | None,
         auth_headers: dict[str, str],
+        jira_type: str = "server",
+        search_path: str | None = None,
     ) -> str | None:
-        """Validate JQL without fetching issues using maxResults=0.
+        """Validate JQL without fetching issues.
 
         Returns the Jira error message string if invalid, None if valid.
         """
-        url = f"{base_url.rstrip('/')}/rest/api/2/search"
+        path = search_path or get_search_path(jira_type)
+        url = f"{base_url.rstrip('/')}{path}"
+        base_headers = {"Accept": "application/json", **auth_headers}
+        resolved_auth = auth if auth and any(auth) else None
+
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    url,
-                    params={"jql": jql, "maxResults": 0},
-                    auth=auth if auth and any(auth) else None,
-                    headers={"Accept": "application/json", **auth_headers},
-                )
+                if jira_type == "cloud":
+                    response = await client.post(
+                        url,
+                        json={"jql": jql, "maxResults": 0},
+                        auth=resolved_auth,
+                        headers={**base_headers, "Content-Type": "application/json"},
+                    )
+                else:
+                    response = await client.get(
+                        url,
+                        params={"jql": jql, "maxResults": 0},
+                        auth=resolved_auth,
+                        headers=base_headers,
+                    )
                 response.raise_for_status()
             return None
         except httpx.HTTPStatusError as exc:
@@ -84,14 +108,47 @@ class JiraSearchClient:
             return str(exc)
 
     async def search(self, request: JiraSearchRequest) -> JiraSearchResult:
-        url = f"{request.base_url}/rest/api/2/search"
+        if request.jira_type == "cloud":
+            return await self._search_cloud(request)
+        return await self._search_server(request)
+
+    async def _search_cloud(self, request: JiraSearchRequest) -> JiraSearchResult:
+        url = f"{request.base_url}{request.resolved_search_path()}"
+        fields_list = [f.strip() for f in request.fields.split(",") if f.strip()]
+        issues: list[dict[str, Any]] = []
+        total = 0
+        next_page_token: str | None = None
+
+        while len(issues) < request.max_results:
+            page_size = min(_JIRA_PAGE_CAP, request.max_results - len(issues))
+            body: dict[str, Any] = {"jql": request.jql, "fields": fields_list, "maxResults": page_size}
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
+
+            page = await self._fetch_page_cloud(url, body, request.auth, request.auth_headers)
+            total = page.total
+            issues.extend(page.issues)
+            logger.info(
+                "Jira Cloud page: pageSize=%d got=%d accumulated=%d total=%d nextToken=%s",
+                page_size, len(page.issues), len(issues), total, bool(page.next_page_token),
+            )
+
+            if not page.issues or not page.next_page_token or len(issues) >= total:
+                break
+            next_page_token = page.next_page_token
+
+        logger.info("Jira Cloud search done: fetched=%d total=%d", len(issues), total)
+        return JiraSearchResult(jql=request.jql, issues=issues, total=total, fetched=len(issues))
+
+    async def _search_server(self, request: JiraSearchRequest) -> JiraSearchResult:
+        url = f"{request.base_url}{request.resolved_search_path()}"
         issues: list[dict[str, Any]] = []
         total = 0
         start_at = 0
 
         while len(issues) < request.max_results:
             page_size = min(_JIRA_PAGE_CAP, request.max_results - len(issues))
-            page = await self._fetch_page(
+            page = await self._fetch_page_server(
                 url=url,
                 jql=request.jql,
                 fields=request.fields,
@@ -103,7 +160,7 @@ class JiraSearchClient:
             total = page.total
             issues.extend(page.issues)
             logger.info(
-                "Jira page: startAt=%d pageSize=%d got=%d accumulated=%d total=%d",
+                "Jira Server page: startAt=%d pageSize=%d got=%d accumulated=%d total=%d",
                 start_at, page_size, len(page.issues), len(issues), total,
             )
 
@@ -111,15 +168,41 @@ class JiraSearchClient:
                 break
             start_at += len(page.issues)
 
-        logger.info("Jira search done: fetched=%d total=%d", len(issues), total)
-        return JiraSearchResult(
-            jql=request.jql,
-            issues=issues,
-            total=total,
-            fetched=len(issues),
+        logger.info("Jira Server search done: fetched=%d total=%d", len(issues), total)
+        return JiraSearchResult(jql=request.jql, issues=issues, total=total, fetched=len(issues))
+
+    async def _fetch_page_cloud(
+        self,
+        url: str,
+        body: dict[str, Any],
+        auth: tuple[str, str] | None,
+        auth_headers: dict[str, str],
+    ) -> JiraPage:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    url,
+                    json=body,
+                    auth=auth if auth and any(auth) else None,
+                    headers={"Accept": "application/json", "Content-Type": "application/json", **auth_headers},
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f"Jira rejected the JQL: {_parse_jira_error(exc)}") from exc
+        except httpx.HTTPError as exc:
+            logger.warning("Jira REST API call failed: %s", exc)
+            raise ValueError(f"Jira connection failed: {exc}") from exc
+
+        payload = response.json()
+        return JiraPage(
+            issues=payload.get("issues", []),
+            total=payload.get("total", 0),
+            start_at=0,
+            max_results=payload.get("maxResults", body.get("maxResults", 0)),
+            next_page_token=payload.get("nextPageToken"),
         )
 
-    async def _fetch_page(
+    async def _fetch_page_server(
         self,
         url: str,
         jql: str,
@@ -129,12 +212,7 @@ class JiraSearchClient:
         auth: tuple[str, str] | None,
         auth_headers: dict[str, str],
     ) -> JiraPage:
-        params = {
-            "jql":        jql,
-            "startAt":    start_at,
-            "maxResults": page_size,
-            "fields":     fields,
-        }
+        params = {"jql": jql, "startAt": start_at, "maxResults": page_size, "fields": fields}
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 response = await client.get(
@@ -145,17 +223,7 @@ class JiraSearchClient:
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            jira_error = ""
-            try:
-                body = exc.response.json()
-                messages = body.get("errorMessages", [])
-                errors = body.get("errors", {})
-                jira_error = "; ".join(messages + list(errors.values()))
-            except Exception:
-                pass
-            msg = jira_error or str(exc)
-            logger.warning("Jira API error (HTTP %s): %s", exc.response.status_code, msg)
-            raise ValueError(f"Jira rejected the JQL: {msg}") from exc
+            raise ValueError(f"Jira rejected the JQL: {_parse_jira_error(exc)}") from exc
         except httpx.HTTPError as exc:
             logger.warning("Jira REST API call failed: %s", exc)
             raise ValueError(f"Jira connection failed: {exc}") from exc
@@ -167,3 +235,17 @@ class JiraSearchClient:
             start_at=payload.get("startAt", start_at),
             max_results=payload.get("maxResults", page_size),
         )
+
+
+def _parse_jira_error(exc: httpx.HTTPStatusError) -> str:
+    try:
+        body = exc.response.json()
+        messages = body.get("errorMessages", [])
+        errors = body.get("errors", {})
+        msg = "; ".join(messages + list(errors.values()))
+        if msg:
+            return msg
+    except Exception:
+        pass
+    logger.warning("Jira API error (HTTP %s): %s", exc.response.status_code, exc)
+    return str(exc)

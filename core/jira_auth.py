@@ -37,6 +37,7 @@ class JiraProfile(BaseModel):
     jira_type: JiraAuthType = JiraAuthType.cloud
     email: str = ""
     token: str = ""
+    search_path: str | None = None
 
     @field_validator("jira_url")
     @classmethod

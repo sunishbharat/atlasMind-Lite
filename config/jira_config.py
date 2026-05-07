@@ -14,6 +14,18 @@ _SYSTEM_FIELD_ENDPOINTS: dict[str, str] = {
     "issuetype":   "/rest/api/2/issuetype",
 }
 
+# Search API paths per Jira deployment type
+# Cloud: REST v2 search was removed; must use REST v3 search/jql (POST, cursor pagination)
+# Server: REST v2 search remains (GET, offset pagination)
+_SEARCH_PATHS: dict[str, str] = {
+    "cloud":  "/rest/api/3/search/jql",
+    "server": "/rest/api/2/search",
+}
+
+
+def get_search_path(jira_type: str) -> str:
+    return _SEARCH_PATHS.get(jira_type, _SEARCH_PATHS["server"])
+
 
 def get_data_dir(jira_url: str) -> Path:
     """Derive a domain-scoped data directory from a Jira base URL.

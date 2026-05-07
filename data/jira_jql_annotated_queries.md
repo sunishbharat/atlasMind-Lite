@@ -1590,3 +1590,31 @@ project = KAFKA AND issueLinkType = "is depended upon by"
 
 /* 506. Find all issues in project HADOOP that has issuelinktype contains */
 project = HADOOP AND issueLinkType = "contains"
+
+/* 507. Find all issues reopened after it was closed in project kafka */
+project = KAFKA AND status WAS "Closed" AND status != "Closed" ORDER BY updated DESC
+
+
+/* 508. Find all issues reopened or opened after it was done or resolved or closed or completed or fixed in project kafka */
+project = HIVE AND status in ("Reopened", "Open") AND status WAS "Closed" ORDER BY updated DESC
+
+/* 509. Which unassigned bugs in KAFKA have more than 3 votes and at least 5 watchers but are still open */
+project = KAFKA AND issuetype = Bug AND assignee is EMPTY AND votes > 3 AND watchers >= 5 AND status in ("Open", "Reopened") ORDER BY votes DESC
+
+/* 510. Show issues where the assignee was changed by someone other than the reporter in the last 30 days, in the consumer or broker component, priority Major or above */
+project = KAFKA AND component in (consumer, broker) AND assignee CHANGED BY currentUser() AFTER -30d AND priority in (Major, Critical, Blocker) ORDER BY updated DESC
+
+/* 511. Find KAFKA bugs mentioning KRaft in the summary or description that are not duplicates and have at least one linked issue */
+project = KAFKA AND issuetype = Bug AND text ~ "KRaft" AND resolution != Duplicate AND issueFunction in hasLinks() ORDER BY updated DESC
+
+/* 512. What bugs or improvements in the streams component have been sitting in In Progress for more than 14 days without being updated */
+project = KAFKA AND issuetype in (Bug, Improvement) AND component = streams AND status = "In Progress" AND status CHANGED TO "In Progress" BEFORE -14d AND updated < -14d ORDER BY updated ASC
+
+/* 513. Show me all issues that affect version 3.9.0 or have a fix version of 3.9.0, excluding tasks, sorted by issue key in project Kafka */
+project = KAFKA AND (affectedVersion = "3.9.0" OR fixVersion = "3.9.0") AND issuetype != Task ORDER BY key ASC
+
+/* 514. Show me all Major or Critical issues in KAFKA that are not in the build, documentation or test components, have been watched by more than 10 people, were never assigned to sun or Jason, and whose fix version is either 3.9.0 or is completely missing */
+project = KAFKA AND priority in (Major, Critical) AND component not in (build, documentation, test) AND watchers > 10 AND assignee WAS NOT IN ("sun", "Jason") AND (fixVersion = "3.9.0" OR fixVersion is EMPTY) ORDER BY watchers DESC, priority ASC
+
+/* 515. Show me all unresolved bugs in KAFKA under the consumer or streams component, reported before 2022, that had at least one status change in the last 2 years, ordered by the oldest first */
+project = KAFKA AND issuetype = Bug AND component in (consumer, streams) AND created <= "2022-01-01" AND resolution is EMPTY AND status CHANGED AFTER "2024-01-01" ORDER BY created ASC

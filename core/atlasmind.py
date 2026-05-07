@@ -589,7 +589,11 @@ class AtlasMind:
         ) if self.field_resolver else ",".join(self.standard_field_ids)
 
         client = JiraSearchClient()
-        jql_error = await client.validate_jql(jql, base_url, auth, auth_headers)
+        jql_error = await client.validate_jql(
+            jql, base_url, auth, auth_headers,
+            jira_type=profile.jira_type,
+            search_path=profile.search_path,
+        )
         if jql_error:
             logger.warning("JQL validation failed: %s | JQL: %s", jql_error, jql)
             raise ValueError(f"Jira rejected the JQL: {jql_error}")
@@ -601,6 +605,8 @@ class AtlasMind:
                 fields=all_fields,
                 max_results=max_results,
                 base_url=base_url,
+                jira_type=profile.jira_type,
+                search_path=profile.search_path,
                 auth=auth,
                 auth_headers=auth_headers,
             )

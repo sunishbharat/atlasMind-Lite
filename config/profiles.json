@@ -5,16 +5,15 @@
       "jira_url": "[JIRA CLOUD]",
       "email": "[EMAIL_ADDRESS]",
       "token": "",
-      "client_id": "",
-      "client_secret": "cloud"
+      "jira_type": "cloud",
+      "search_path": ""
     },
     "work": {
       "jira_url": "https://issues.apache.org/jira",
       "email": "",
       "token": "",
-      "client_id": "",
-      "client_secret": "",
-      "jira_type": "server"
+      "jira_type": "server",
+      "search_path": ""
     }
   }
 }
