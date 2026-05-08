@@ -51,7 +51,7 @@ class Jira_Field_Embeddings:
         # Reuse an existing DocumentProcessor (and its loaded SentenceTransformer)
         # when one is passed in — avoids loading the same model a second time.
         self.documentProc = document_processor if document_processor else DocumentProcessor(embedconfig=self.config)
-        self.embedding_dim = self.documentProc._model.get_embedding_dimension()
+        self.embedding_dim = self.documentProc._model.get_sentence_embedding_dimension()
         self.pgConfig = self.get_pgConfig_env()
         logger.info(f"Jira field Embedding dimension: {self.embedding_dim}")
 

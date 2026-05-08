@@ -114,7 +114,7 @@ class JiraAssetEmbeddings:
 
         Also adds the object_name column if upgrading from a prior schema that lacked it.
         """
-        dim = self.documentProc._model.get_embedding_dimension()
+        dim = self.documentProc._model.get_sentence_embedding_dimension()
         with PGVectorClient(self.pgConfig) as pgclient:
             with pgclient.cursor() as cur:
                 cur.execute(f"""

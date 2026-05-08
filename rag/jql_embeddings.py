@@ -40,7 +40,7 @@ class JQL_Embeddings:
         self.config = config if config else EmbeddingsConfig(model_name=self.model_name)
 
         self.documentProc = documentProc if documentProc else DocumentProcessor(embedconfig=self.config)
-        self.embedding_dim = self.documentProc._model.get_embedding_dimension()
+        self.embedding_dim = self.documentProc._model.get_sentence_embedding_dimension()
         self.pgConfig = self.get_pgConfig_env()
         logger.info(f"Embedding dimension: {self.embedding_dim}")
 
