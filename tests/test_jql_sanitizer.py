@@ -260,6 +260,26 @@ class TestMultiwordInValueQuoting:
         # Single-word "Bug" should not gain extra quotes
         assert result.jql.count('"Bug"') <= 1
 
+    def test_single_quoted_value_with_parens_not_corrupted(self, sanitizer):
+        # Regression: ')' inside a single-quoted value caused the Pass-2 regex to
+        # terminate early, treating the partial token as unquoted and double-wrapping it.
+        # Use assignee (no allowed-value set) so Phase 2 does not strip the condition.
+        result = sanitizer.sanitize(
+            "status = Done AND assignee in ('Sample Domain (XY-9999)') ORDER BY created DESC"
+        )
+        assert "\"'Sample Domain (XY-9999)'\"" not in result.jql
+        assert "'Sample Domain (XY-9999)'" in result.jql
+
+    def test_multiple_values_one_with_parens_not_corrupted(self, sanitizer):
+        # Mix: one plain and one paren-containing single-quoted value.
+        # assignee has no allowed-value set so Phase 2 does not interfere.
+        result = sanitizer.sanitize(
+            "assignee in ('user-a', 'Sample Domain (XY-9999)') ORDER BY created DESC"
+        )
+        assert "'user-a'" in result.jql
+        assert "'Sample Domain (XY-9999)'" in result.jql
+        assert "\"'Sample Domain (XY-9999)'\"" not in result.jql
+
 
 # ---------------------------------------------------------------------------
 # Structural passes

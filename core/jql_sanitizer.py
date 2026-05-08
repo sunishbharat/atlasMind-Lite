@@ -47,7 +47,13 @@ _JQL_WHERE_OPERATORS = (
 )
 
 _JQL_QUOTED_NUMBER_RE = re.compile(r"""(['"])(\d+)\1""")
-_JQL_IN_CLAUSE_RE = re.compile(r"((?:NOT\s+)?IN)\s*\(([^)]*)\)", re.IGNORECASE)
+# Matches IN (...) / NOT IN (...) capturing the full value list.
+# The alternation handles quoted values that may legally contain ')' (e.g. Assets
+# object keys like 'Sample Domain (XY-9999)'), preventing premature match termination.
+_JQL_IN_CLAUSE_RE = re.compile(
+    r"""((?:NOT\s+)?IN)\s*\(((?:'[^']*'|"[^"]*"|[^)'"])*)\)""",
+    re.IGNORECASE,
+)
 _JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+", re.IGNORECASE)
 _JQL_ARITHMETIC_ORDER_RE = re.compile(
     r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE
@@ -79,8 +85,10 @@ _JQL_AND_EQUALITY_RE = re.compile(
     re.IGNORECASE,
 )
 # Matches AND field IN (...) or AND field NOT IN (...).
+# Same quoted-value alternation as _JQL_IN_CLAUSE_RE so that ')' inside a quoted
+# value does not terminate the match early.
 _JQL_AND_IN_RE = re.compile(
-    r"""\s+AND\s+([\w\[\]]+)\s+(NOT\s+IN|IN)\s*\(([\s\S]*?)\)""",
+    r"""\s+AND\s+([\w\[\]]+)\s+(NOT\s+IN|IN)\s*\(((?:'[^']*'|"[^"]*"|[^)'"])*)\)""",
     re.IGNORECASE,
 )
 
