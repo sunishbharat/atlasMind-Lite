@@ -76,7 +76,11 @@ class GroqClient:
         except httpx.ConnectError as e:
             raise GroqUnavailable("Groq API is not reachable") from e
         except httpx.HTTPStatusError as e:
-            raise GroqUnavailable(f"Groq API error {e.response.status_code}: {e.response.text}") from e
+            try:
+                detail = e.response.json().get("error", {}).get("message") or e.response.text
+            except Exception:
+                detail = e.response.text
+            raise GroqUnavailable(f"Groq API error {e.response.status_code}: {detail}") from e
 
         data = response.json()
         usage = data.get("usage", {})

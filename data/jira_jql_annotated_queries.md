@@ -1618,3 +1618,11 @@ project = KAFKA AND priority in (Major, Critical) AND component not in (build, d
 
 /* 515. Show me all unresolved bugs in KAFKA under the consumer or streams component, reported before 2022, that had at least one status change in the last 2 years, ordered by the oldest first */
 project = KAFKA AND issuetype = Bug AND component in (consumer, streams) AND created <= "2022-01-01" AND resolution is EMPTY AND status CHANGED AFTER "2024-01-01" ORDER BY created ASC
+
+/* 516. Show all issues in projects KAFKA, ZOOKEEPER, and HIVE that transitioned to status ‘Reopened’ within the last 12 months or 1 year */
+project in (KAFKA, ZOOKEEPER, HIVE) AND status WAS 'Reopened' DURING (startOfYear(-1y), endOfYear(-1y)) ORDER BY updated DESC
+
+/* 517. Bugs reopened at least once in the last 6 months */
+issuetype = Bug AND status CHANGED TO 'Reopened' AFTER -26w ORDER BY updated DESC
+
+

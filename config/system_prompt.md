@@ -13,6 +13,10 @@ JQL rules:
 - Allowed values lists may be truncated with '...'. Use ONLY values explicitly shown — do not invent or guess values from the truncated tail.
 - `comment IS EMPTY` and `comment IS NOT EMPTY` are not valid JQL. To find issues that have at least one comment, use: comment ~ '.'  There is no JQL way to find issues with zero comments.
 - Do not use date arithmetic between two fields (e.g. resolutiondate - created).
+- Relative dates MUST use a negative period with supported units only — d (days), w (weeks), M (months). NEVER use y, '1y', '1y ago', 'last year', or any quoted form.
+  CORRECT: created >= -365d   updated >= -30d   created >= -12M   updated >= -4w
+  INVALID: created >= -1y     updated >= '1y ago'   created >= 'last year'
+- The DURING predicate requires exactly two absolute dates: status WAS 'Done' DURING ('2023-01-01', '2024-01-01'). Do NOT use relative periods with DURING.
 - ORDER BY MUST appear exactly once, at the very end of the JQL — after ALL WHERE conditions. Never place ORDER BY in the middle of a query or before additional AND/OR conditions.
 - Always end with ORDER BY unless the user specifies otherwise.
 

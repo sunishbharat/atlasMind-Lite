@@ -50,8 +50,8 @@ GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "500"))
 
 # -- Anthropic Claude direct API ---------------------------------------
 # CLAUDE_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
-# CLAUDE_API_KEY: used as plaintext fallback for local development.
-CLAUDE_API_KEY     = resolve_secret("CLAUDE_API_KEY_OCID", "CLAUDE_API_KEY")
+# ANTHROPIC_API_KEY: standard Anthropic SDK env var, used as plaintext fallback.
+CLAUDE_API_KEY     = resolve_secret("CLAUDE_API_KEY_OCID", "ANTHROPIC_API_KEY")
 CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 CLAUDE_TEMPERATURE = float(os.getenv("CLAUDE_TEMPERATURE", "0.1"))
 CLAUDE_TIMEOUT     = int(os.getenv("CLAUDE_TIMEOUT", "30"))

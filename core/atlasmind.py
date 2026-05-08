@@ -602,8 +602,14 @@ class AtlasMind:
         system_prompt = self.system_prompt_dir.read_text(encoding="utf-8")
 
         def _field_line(row: tuple) -> str:
+            field_id = row[1]
+            field_name = row[2]
             desc = _truncate_field_desc(row[5])
-            hints = value_hints.get(row[1])
+            hints = value_hints.get(field_id)
+            if hints and field_id in self.asset_field_ids:
+                example = f'"{field_name}" IN {hints[0]}'
+                extra = f", {', '.join(hints[1:])}" if len(hints) > 1 else ""
+                return f"  - {desc} [Assets field — use aqlFunction syntax: {example}{extra}]"
             if hints:
                 return f"  - {desc} [Query-relevant values: {', '.join(hints)}]"
             return f"  - {desc}"
@@ -630,7 +636,9 @@ class AtlasMind:
             "   CORRECT: resolution IS NOT EMPTY ORDER BY resolutiondate DESC\n"
             "   (duration filtering is handled externally — omit it from JQL)\n"
             "5. Do NOT append LIMIT — result count is controlled externally.\n"
-            "6. Always end with ORDER BY using a field ID from ## Available Jira Fields above — never use issueFunction or any field not listed there.\n\n"
+            "6. Always end with ORDER BY using a field ID from ## Available Jira Fields above — never use issueFunction or any field not listed there.\n"
+            "7. For fields marked '[Assets field — use aqlFunction syntax]', NEVER use plain IN ('...'). "
+            "Always write: \"FieldName\" IN aqlFunction('Name = \"value\"')\n\n"
             "## Similar JQL Examples\n"
             f"{examples_block}\n\n"
             "## User Request\n"

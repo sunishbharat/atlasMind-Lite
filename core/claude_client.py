@@ -31,12 +31,12 @@ class ClaudeClient:
 
     def test_connection(self) -> None:
         if not self.api_key:
-            raise ClaudeUnavailable("CLAUDE_API_KEY is not set")
+            raise ClaudeUnavailable("ANTHROPIC_API_KEY is not set")
         logger.info("Claude client ready (API key present)")
 
     async def generate_jql(self, prompt: str) -> str:
         if not self.api_key:
-            raise ClaudeUnavailable("CLAUDE_API_KEY is not set")
+            raise ClaudeUnavailable("ANTHROPIC_API_KEY is not set")
 
         logger.info("Claude client generating response using model: %s", self.model)
 
@@ -70,7 +70,8 @@ class ClaudeClient:
         except anthropic.APITimeoutError as e:
             raise ClaudeUnavailable(f"Anthropic API timed out after {self.timeout}s") from e
         except anthropic.APIStatusError as e:
-            raise ClaudeUnavailable(f"Anthropic API error {e.status_code}: {e.message}") from e
+            detail = (e.body or {}).get("error", {}).get("message") or e.message
+            raise ClaudeUnavailable(f"Anthropic API error {e.status_code}: {detail}") from e
 
         usage = response.usage
         logger.info(

@@ -7,6 +7,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 from core.atlasmind import AtlasMind, normalize_issue, _FIELD_ID_TO_OUTPUT_KEY
 from core.vllm_client import VllmUnavailable
+from core.claude_client import ClaudeUnavailable
+from core.groq_client import GroqUnavailable
+from core.bedrock_claude_client import BedrockUnavailable
 from core.field_resolver import ExtraField, ResolvedIntentFields
 from dconfig import EmbeddingsConfig
 from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta, TokenUsage
@@ -224,9 +227,9 @@ async def query_get(
     except asyncio.CancelledError:
         logger.info("Query cancelled by client: request_id=%s", request_id)
         return _error_response("Query cancelled.")
-    except VllmUnavailable as exc:
-        logger.error("Query failed — vLLM unavailable: %s", exc)
-        return _error_response("LLM service is temporarily unavailable. Please try again later.", getattr(exc, "token_usage", None))
+    except (VllmUnavailable, ClaudeUnavailable, GroqUnavailable, BedrockUnavailable) as exc:
+        logger.error("Query failed — LLM unavailable: %s", exc)
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc), getattr(exc, "token_usage", None))
@@ -265,9 +268,9 @@ async def query_post(
     except asyncio.CancelledError:
         logger.info("Query cancelled by client: request_id=%s", request.request_id)
         return _error_response("Query cancelled.")
-    except VllmUnavailable as exc:
-        logger.error("Query failed — vLLM unavailable: %s", exc)
-        return _error_response("LLM service is temporarily unavailable. Please try again later.", getattr(exc, "token_usage", None))
+    except (VllmUnavailable, ClaudeUnavailable, GroqUnavailable, BedrockUnavailable) as exc:
+        logger.error("Query failed — LLM unavailable: %s", exc)
+        return _error_response(str(exc), getattr(exc, "token_usage", None))
     except ValueError as exc:
         logger.error("Query failed: %s", exc)
         return _error_response(str(exc), getattr(exc, "token_usage", None))
