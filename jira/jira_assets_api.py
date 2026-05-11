@@ -237,8 +237,15 @@ async def refresh_asset_values(
     override_file = Path(JIRA_ASSETS_CONFIG_FILE)
     if override_file.exists():
         overrides: dict = json.loads(override_file.read_text(encoding="utf-8"))
-        asset_config.update(overrides)
-        logger.info("Applied %d override(s) from %s", len(overrides), override_file.name)
+        # jira_assets_fields.json contains flat overrides: field_id → dict.
+        # Filter out the non-field-key top-level entries (e.g. asset_field_keywords).
+        field_overrides = {
+            k: v for k, v in overrides.items()
+            if k not in ("asset_field_keywords",)
+        }
+        if field_overrides:
+            asset_config.update(field_overrides)
+            logger.info("Applied %d override(s) from %s", len(field_overrides), override_file.name)
 
     if not asset_config:
         logger.info("No Assets fields detected or configured — nothing to fetch.")
