@@ -21,6 +21,7 @@ from settings import (
     DATABASE_URL, EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE,
     JIRA_FIELD_TABLE, JIRA_FIELD_COL_DESCRIPTION, JIRA_FIELD_COL_EMBEDDING, JIRA_FIELD_SEARCH_LIMIT,
     JIRA_FIELD_IGNORE_IDS, MAX_ALLOWED_VALUES_IN_DESC,
+    JIRA_ASSETS_CONFIG_FILE,
 )
 from rag.seed_manager import compute_file_hash, needs_reseeding, save_hash, get_stored_hash
 from jira.jira_field_api import fetch_and_save_fields, fetch_and_save_allowed_values
@@ -491,6 +492,23 @@ class Jira_Field_Embeddings:
         else:
             logger.info("Allowed values file not found at %s — descriptions built without options", av_path)
 
+        # Load asset field detection keywords from config file (required)
+        # Keywords in schema.custom that indicate an Assets/Insight field
+        asset_keywords: list[str] = []
+        config_path = Path(JIRA_ASSETS_CONFIG_FILE)
+        if config_path.exists():
+            try:
+                config_data = _json.loads(config_path.read_text(encoding="utf-8"))
+                asset_keywords = config_data.get("asset_field_keywords", [])
+                if not asset_keywords:
+                    logger.warning("asset_field_keywords not set in config — Assets fields may not be detected")
+                else:
+                    logger.info("Using %d asset field keywords from config: %s", len(asset_keywords), asset_keywords)
+            except Exception as e:
+                logger.warning("Failed to load asset keywords config: %s", e)
+        else:
+            logger.warning("Config file not found at %s — Assets fields may not be detected", config_path)
+
         skipped = 0
         records: list[dict] = []
         for field_id, field in raw.items():
@@ -498,7 +516,9 @@ class Jira_Field_Embeddings:
             schema: dict = field.get("schema") or {}
             field_type: str = schema.get("type", "unknown")
             is_custom: bool = bool(field.get("custom", False))
-            is_asset_field: bool = schema.get("custom", "").startswith("com.atlassian.jira.plugins.cmdb:")
+            # Detect Assets/Insight fields via configurable keywords in schema.custom
+            custom_schema = schema.get("custom", "")
+            is_asset_field: bool = any(k in custom_schema for k in asset_keywords)
             clause_names: list[str] = field.get("clauseNames", [field_id])
 
             # Skip fields explicitly listed in the ignore set

@@ -308,7 +308,8 @@ instead of the incorrect `domain = "Sample Domain"` that a plain LLM would produ
 
 At startup, AtlasMind:
 
-1. Reads `jira_fields.json` (already on disk after the first run) and detects every field whose `schema.custom` starts with `com.atlassian.jira.plugins.cmdb:` — the definitive Jira Assets indicator.
+1. Reads `config/jira_assets_fields.json` to get asset field detection keywords (default: `[".insight", ".cmdb"]`).
+2. Reads `jira_fields.json` and detects every field whose `schema.custom` contains any of the configured keywords — the definitive Jira Assets/Insight indicator.
 2. Fetches all object labels for each detected field from the Jira Assets AQL API (`GET /rest/assets/1.0/object/aql`).
 3. Writes the results to `data/<hostname>/jira_assets.json` and seeds the `jira_asset_values` pgvector table.
 4. On subsequent startups, re-fetch is skipped if `jira_fields.json` has not changed (hash-gated).
@@ -333,6 +334,20 @@ from jira.jira_assets_api import refresh_asset_values
 asyncio.run(refresh_asset_values())
 "
 ```
+
+### Configuring asset field detection keywords
+
+AtlasMind detects Assets/Insight fields by looking for keywords in `schema.custom`. Default keywords: `[".insight", ".cmdb"]`.
+
+To add a custom keyword (e.g., for a vendor-specific plugin), edit `config/jira_assets_fields.json`:
+
+```json
+{
+    "asset_field_keywords": [".insight", ".cmdb", ".custom-plugin"]
+}
+```
+
+After changing this config, re-fetch Jira fields and restart AtlasMind to re-seed the vector DB.
 
 ### Overriding the object type name
 
@@ -418,7 +433,7 @@ Fetched automatically on first run from `/rest/api/2/field`. Keyed by field ID. 
 
 ### Jira Assets override config (`config/jira_assets_fields.json`)
 
-Optional. Use only when the AQL object type name differs from the field display name. Auto-detection covers the common case; entries here take precedence over auto-detected values. See the [Jira Assets](#jira-assets-optional) section.
+Contains `asset_field_keywords` (keywords to detect Assets/Insight fields in `schema.custom`) and optional per-field object type overrides. See the [Jira Assets](#jira-assets-optional) section.
 
 ### Jira Assets cache (`data/{domain_slug}/jira_assets.json`)
 

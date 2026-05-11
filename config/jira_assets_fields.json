@@ -1,6 +1,3 @@
 {
-    "customfield_10200": {
-        "display_name": "Domain",
-        "object_type": "Domain"
-    }
+    "asset_field_keywords": [".insight", ".cmdb"]
 }
