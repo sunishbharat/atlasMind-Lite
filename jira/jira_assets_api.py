@@ -28,19 +28,41 @@ from settings import JIRA_ASSETS_CONFIG_FILE, JIRA_ASSETS_FILENAME, JIRA_FIELDS_
 
 logger = logging.getLogger(__name__)
 
-_ASSETS_SCHEMA_PREFIX = "com.atlassian.jira.plugins.cmdb:"
+_DEFAULT_ASSET_KEYWORDS = [".insight", ".cmdb"]
 
 
-def detect_asset_fields(fields_json: Path) -> dict[str, dict]:
+def _load_asset_keywords_from_config() -> list[str]:
+    """Read asset_field_keywords from config/jira_assets_fields.json at runtime."""
+    try:
+        config_file = Path(JIRA_ASSETS_CONFIG_FILE)
+        if config_file.exists():
+            config_data = json.loads(config_file.read_text(encoding="utf-8"))
+            keywords = config_data.get("asset_field_keywords")
+            if isinstance(keywords, list) and keywords:
+                logger.info(
+                    "detect_asset_fields: using %d asset keyword(s) from config: %s",
+                    len(keywords), keywords,
+                )
+                return keywords
+    except Exception:
+        pass
+    return _DEFAULT_ASSET_KEYWORDS
+
+
+def detect_asset_fields(fields_json: Path, asset_keywords: list[str] | None = None) -> dict[str, dict]:
     """Read jira_fields.json and return all Assets-type fields.
 
-    Detects fields whose schema.custom starts with 'com.atlassian.jira.plugins.cmdb:'
-    — the definitive Jira Assets indicator. Uses the field display name as the AQL
-    object type name (covers the common case where field name == object type name).
-    Override via config/jira_assets_fields.json when they differ.
+    Asset keywords (e.g. ".insight", ".cmdb") are used to detect Assets fields
+    from schema.custom. When asset_keywords is None, reads from
+    config/jira_assets_fields.json at runtime — no rebuild needed to change keywords.
+    Fields whose schema.custom contains any configured keyword are treated as Assets
+    fields. Uses the field display name as the AQL object type name. Override via
+    config/jira_assets_fields.json when it differs.
 
     Args:
         fields_json: Path to data/<hostname>/jira_fields.json.
+        asset_keywords: Optional list of keywords to detect Assets fields. If None,
+            reads from config at runtime. Defaults to [".insight", ".cmdb"].
 
     Returns:
         {field_id: {"display_name": str, "object_type": str}}, or {} if the file
@@ -50,11 +72,14 @@ def detect_asset_fields(fields_json: Path) -> dict[str, dict]:
         logger.info("detect_asset_fields: %s not found — skipping.", fields_json)
         return {}
 
+    if asset_keywords is None:
+        asset_keywords = _load_asset_keywords_from_config()
+
     raw: dict = json.loads(fields_json.read_text(encoding="utf-8"))
     result: dict[str, dict] = {}
     for field_id, field in raw.items():
         schema_custom: str = (field.get("schema") or {}).get("custom", "")
-        if schema_custom.startswith(_ASSETS_SCHEMA_PREFIX):
+        if any(kw in schema_custom for kw in asset_keywords):
             name = field.get("name", field_id)
             result[field_id] = {"display_name": name, "object_type": name}
             logger.info("detect_asset_fields: found %s (%r)", field_id, name)
@@ -237,12 +262,18 @@ async def refresh_asset_values(
     override_file = Path(JIRA_ASSETS_CONFIG_FILE)
     if override_file.exists():
         overrides: dict = json.loads(override_file.read_text(encoding="utf-8"))
-        # jira_assets_fields.json contains flat overrides: field_id → dict.
-        # Filter out the non-field-key top-level entries (e.g. asset_field_keywords).
+        # Per-field overrides (e.g. {"customfield_xxx": {"display_name": ..., "object_type": ...}}).
+        # asset_field_keywords is read internally by detect_asset_fields — not an override.
         field_overrides = {
             k: v for k, v in overrides.items()
-            if k not in ("asset_field_keywords",)
+            if isinstance(v, dict)
         }
+        skipped = {k: type(v).__name__ for k, v in overrides.items() if not isinstance(v, dict)}
+        if skipped:
+            logger.info(
+                "Skipped %d non-dict config entry(ies) from %s: %s",
+                len(skipped), override_file.name, skipped,
+            )
         if field_overrides:
             asset_config.update(field_overrides)
             logger.info("Applied %d override(s) from %s", len(field_overrides), override_file.name)

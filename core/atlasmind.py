@@ -31,7 +31,6 @@ from settings import (
     CHART_SPEC_PROMPT_FILE,
     DEFAULT_ANNOTATION_FILE,
     JIRA_ALLOWED_VALUES_FILENAME,
-    JIRA_ASSETS_CONFIG_FILE,
     JIRA_ASSETS_FILENAME,
     JIRA_FIELDS_FILENAME,
     JQL_MAX_ATTEMPTS,
@@ -478,11 +477,6 @@ class AtlasMind:
         # Assets are optional — failures are logged but never crash startup.
         try:
             auto_detected = detect_asset_fields(fields_file)
-
-            override_file = Path(JIRA_ASSETS_CONFIG_FILE)
-            if override_file.exists():
-                overrides: dict = json.loads(override_file.read_text(encoding="utf-8"))
-                auto_detected.update(overrides)
 
             assets_file = get_data_dir(profile.jira_url) / JIRA_ASSETS_FILENAME
             self.asset_embeddings = JiraAssetEmbeddings(self.embedconfig, self.document_processor)
