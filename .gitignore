@@ -213,3 +213,8 @@ sample/
 
 # Atlassian credentials
 # profiles.json is tracked — tokens/secrets must remain empty
+
+# Dot-files and dot-directories (local tooling, IDE settings, secrets)
+.*
+!.gitignore
+!.python-version

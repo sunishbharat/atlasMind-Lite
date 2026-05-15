@@ -19,6 +19,24 @@ A natural language to JQL (Jira Query Language) generator using RAG (Retrieval-A
 uv sync
 ```
 
+### One-time Jira field fetch
+
+Run these once against your active Jira profile before starting the server for the first time, or after switching to a new Jira instance:
+
+```bash
+# Fetch all Jira field metadata and cache locally
+uv run python -c "from jira.jira_field_api import fetch_and_save_fields; fetch_and_save_fields()"
+
+# Fetch allowed values for all eligible fields (status, priority, issue types, custom options)
+uv run python -c "
+import asyncio
+from jira.jira_field_api import fetch_and_save_allowed_values
+asyncio.run(fetch_and_save_allowed_values())
+"
+```
+
+Files are written to `data/{domain_slug}/` and used to seed the pgvector tables on next startup. AtlasMind will also fetch them automatically on first run if they are absent.
+
 Set the following environment variables (or rely on the defaults in `settings.py`):
 
 | Variable | Default | Description |
@@ -37,12 +55,14 @@ Set the following environment variables (or rely on the defaults in `settings.py
 | `JQL_MAX_ATTEMPTS` | `4` | Total JQL attempts per query: 1 initial + (`JQL_MAX_ATTEMPTS` − 1) retries on Jira validation errors |
 | `MAX_INTENT_FIELDS` | `5` | Maximum extra fields the LLM may propose per query |
 | `STANDARD_FIELD_IDS` | `key,summary,assignee,priority,issuetype,created,resolutiondate` | Comma-separated list of Jira field IDs always shown in results — override per project or Docker deployment |
+| `VALUE_AUTO_CORRECT_THRESHOLD` | `0.15` | Cosine distance below which the sanitizer silently auto-corrects a bad value to the nearest known allowed value (e.g. typo correction) |
 | `VALUE_HINT_THRESHOLD` | `0.40` | Cosine distance threshold for JQL value correction — bad values within this distance of a known allowed value are flagged |
 | `VALUE_HINT_MAX_CANDIDATES` | `3` | Maximum candidate values surfaced per field for JQL sanitizer corrections |
 | `VALUE_PROMPT_MAX_CANDIDATES` | `3` | Maximum candidate values injected into the retry prompt as hints for the LLM |
 | `EMBEDDING_BATCH_SIZE` | `256` | Batch size for SentenceTransformer encoding during seeding — higher values reduce seeding time on CPU/GPU |
 | `MAX_VALUES_FOR_EMBEDDING` | `50` | Maximum allowed values embedded per field in `jira_field_values`. High-cardinality fields (versions, components) are capped here; the in-memory exact-match dict always holds all values so casing correction is unaffected |
 | `VLLM_URL` | — | vLLM server base URL (e.g. `http://100.x.x.x:8002`) |
+| `VLLM_FALLBACK` | `ollama` | Backend to use if vLLM is unreachable at startup (`ollama`, `groq`, `claude`, `bedrock`) |
 | `VLLM_TIMEOUT` | `240` | Read timeout in seconds for vLLM inference |
 | `VLLM_MAX_TOKENS` | — | Max tokens for vLLM responses |
 | `VLLM_API_KEY` | — | API key if the vLLM server requires authentication |
@@ -127,8 +147,11 @@ Starts the REST API on `http://0.0.0.0:8000`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Liveness check |
-| `POST` | `/query` | Generate JQL from natural language |
+| `GET` | `/health` | Liveness check — returns `{"status": "ok"}` |
+| `GET` | `/meta` | Server metadata: active model name, LLM backend, and timeout |
+| `GET` | `/query` | Generate JQL from natural language (query via `q` URL param) |
+| `POST` | `/query` | Same as GET but query in request body (`{"query": "..."}`) |
+| `POST` | `/event` | Client events: `{"event": "cancel", "request_id": "..."}` to abort an in-flight query |
 
 ```bash
 curl -X POST http://localhost:8000/query \
@@ -226,7 +249,7 @@ A fourth vector table (`jira_asset_values`) stores one embedding per `(field_id,
 | `core/jql_sanitizer.py` | Deterministic JQL pre-execution corrections: strips invalid field values, rewrites unsupported operators, injects value-hint candidates into retry prompts |
 | `jira/jira_field_api.py` | Fetches field metadata and allowed values from the Jira REST API |
 | `jira/jira_assets_api.py` | Fetches Jira Assets object labels via the Assets AQL API; `list_asset_fields()` prints detected Insight/Assets custom fields from the cached `jira_fields.json` |
-| `seed_manager.py` | MD5 hash-based seeding gate stored in a `seed_metadata` pgvector table |
+| `rag/seed_manager.py` | MD5 hash-based seeding gate stored in a `seed_metadata` pgvector table |
 | `config/profiles.json` | Jira connection profiles (URL, credentials); `default` key selects the active one |
 | `config/system_prompt.md` | JQL-only system prompt (general answers handled by router) |
 | `config/router_prompt.md` | Router prompt template with Jira vocabulary list and few-shot examples |
@@ -308,11 +331,11 @@ instead of the incorrect `domain = "Sample Domain"` that a plain LLM would produ
 
 At startup, AtlasMind:
 
-1. Reads `config/jira_assets_fields.json` to get asset field detection keywords (default: `[".insight", ".cmdb"]`).
+1. Reads `config/jira_assets_fields.json` to get asset field detection keywords (default: `[".insight", ".cmdb"]`) — read at runtime, no rebuild needed.
 2. Reads `jira_fields.json` and detects every field whose `schema.custom` contains any of the configured keywords — the definitive Jira Assets/Insight indicator.
-2. Fetches all object labels for each detected field from the Jira Assets AQL API (`GET /rest/assets/1.0/object/aql`).
-3. Writes the results to `data/<hostname>/jira_assets.json` and seeds the `jira_asset_values` pgvector table.
-4. On subsequent startups, re-fetch is skipped if `jira_fields.json` has not changed (hash-gated).
+3. Fetches all object labels for each detected field from the Jira Assets AQL API (`GET /rest/assets/1.0/object/aql`).
+4. Writes the results to `data/<hostname>/jira_assets.json` and seeds the `jira_asset_values` pgvector table.
+5. On subsequent startups, re-fetch is skipped if `jira_fields.json` has not changed (hash-gated).
 
 No manual configuration is required. A log line confirms the load:
 
@@ -347,7 +370,7 @@ To add a custom keyword (e.g., for a vendor-specific plugin), edit `config/jira_
 }
 ```
 
-After changing this config, re-fetch Jira fields and restart AtlasMind to re-seed the vector DB.
+Keywords are read from the config file at runtime on every startup — no rebuild or re-deploy needed. Restart AtlasMind after changing this file to re-seed the asset vector table with the updated detection rules.
 
 ### Overriding the object type name
 
