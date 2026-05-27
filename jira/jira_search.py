@@ -84,7 +84,7 @@ class JiraSearchClient:
                 if jira_type == "cloud":
                     response = await client.post(
                         url,
-                        json={"jql": jql, "maxResults": 0},
+                        json={"jql": jql, "maxResults": 1},
                         auth=resolved_auth,
                         headers={**base_headers, "Content-Type": "application/json"},
                     )
