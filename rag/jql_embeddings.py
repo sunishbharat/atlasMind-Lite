@@ -154,8 +154,6 @@ class JQL_Embeddings:
             LIMIT {JQL_SEARCH_LIMIT};
             """
 
-        logging.info(f"SQL Query = {sql}")
-
         with PGVectorClient(self.pgConfig) as pgclient:
             with pgclient.cursor() as cur:
                 cur.execute(sql, (query_emb, query_emb))

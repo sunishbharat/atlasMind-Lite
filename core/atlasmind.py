@@ -503,8 +503,9 @@ class AtlasMind:
                     logger.info("Assets fields unchanged — skipping re-fetch from Jira.")
 
             self.asset_embeddings.seed(assets_file)
-            _, asset_allowed = load_asset_data(assets_file)
+            asset_ids, asset_allowed = load_asset_data(assets_file)
             self.allowed_values.update(asset_allowed)
+            self.asset_field_ids.update(asset_ids)
         except Exception as exc:
             logger.error(
                 "Failed to load asset fields — asset value hints disabled for this session. Error: %s",

@@ -21,8 +21,15 @@ from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL, CLAUDE_MODEL, BE
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
 )
+_uvicorn_handler = logging.StreamHandler()
+_uvicorn_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+for _uvicorn_logger in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    _log = logging.getLogger(_uvicorn_logger)
+    _log.handlers = [_uvicorn_handler]
+    _log.propagate = False
 logger = logging.getLogger(__name__)
 
 _atlasmind: AtlasMind | None = None
