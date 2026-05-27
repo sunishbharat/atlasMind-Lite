@@ -118,6 +118,7 @@ class JiraSearchClient:
 
     async def _search_cloud(self, request: JiraSearchRequest) -> JiraSearchResult:
         url = f"{request.base_url}{request.resolved_search_path()}"
+        logger.info("Jira Cloud REST API URL: POST %s", url)
         fields_list = [f.strip() for f in request.fields.split(",") if f.strip()]
         issues: list[dict[str, Any]] = []
         total = 0

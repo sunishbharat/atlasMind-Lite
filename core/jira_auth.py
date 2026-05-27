@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from enum import Enum
 
 from fastapi import Header
@@ -58,14 +59,14 @@ class JiraProfile(BaseModel):
         """Build the httpx auth credential for this profile.
 
         token_override takes precedence — used for per-request PATs from X-Jira-Token.
-        Falls back to the profile-configured token, then unauthenticated.
+        Falls back to the profile-configured token, then JIRA_TOKEN env var, then unauthenticated.
         """
-        token = token_override or self.token
+        token = token_override or self.token or os.getenv("JIRA_TOKEN", "")
         if self.jira_type == JiraAuthType.server and token:
             return JiraCredential(headers={"Authorization": f"Bearer {token}"})
         if self.email and token:
             return JiraCredential(auth=(self.email, token))
-        logger.debug("No Jira credentials resolved — request will be unauthenticated")
+        logger.warning("No Jira credentials resolved — request will be unauthenticated")
         return JiraCredential()
 
 

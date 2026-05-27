@@ -225,7 +225,7 @@ class JiraAssetEmbeddings:
 
         Args:
             field_id: Jira custom field ID, e.g. "customfield_10200".
-            query:    Raw search term, e.g. "driving functions".
+            query:    Raw search term, e.g. "sample domain".
             model:    SentenceTransformer — must be the same model used at seeding.
             top_n:    Maximum candidates to return.
 
