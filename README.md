@@ -1,6 +1,12 @@
 # Atlasmind-Lite
 
 A natural language to JQL (Jira Query Language) generator using RAG (Retrieval-Augmented Generation) with pgvector. Supports multiple LLM backends: local Ollama, vLLM (GPU inference server), Groq cloud, Anthropic Claude direct API, and AWS Bedrock-compatible endpoints. Returns structured JSON with a JQL query, a chart specification, and a plain-text answer. A two-stage router answers general questions immediately without touching the JQL pipeline.
+**[Try it live: atlasmind.de](https://atlasmind.de/)**
+
+## Preview
+<p align="center">
+<img width="1908" height="985" alt="Image" src="https://github.com/user-attachments/assets/e7944eda-30e2-44a6-8f4a-90e67ff7e08a" />
+</p>
 
 ## Prerequisites
 
