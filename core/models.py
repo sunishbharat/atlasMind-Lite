@@ -29,6 +29,7 @@ class JqlResponse(BaseModel):
     chart_spec:    dict[str, Any] | None = None
     answer:        str | None            = None
     intent_fields: list[str] | None      = None
+    where_fields:  list[str] | None      = None  # display names of fields used in WHERE clause
 
 
 class ChartSpec(BaseModel):

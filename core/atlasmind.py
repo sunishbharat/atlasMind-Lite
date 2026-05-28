@@ -521,6 +521,7 @@ class AtlasMind:
             allowed_values=self.allowed_values,
             field_value_embeddings=self.field_value_embeddings,
             model=self.document_processor._model,
+            asset_field_ids=self.asset_field_ids,
         )
 
     async def _build_prompt(self, query: str) -> tuple[str, list[str]]:
@@ -810,6 +811,7 @@ class AtlasMind:
         llm_result = JqlResponse(**data)
         logger.info("*** AI JQL: %s", llm_result.jql)
         logger.info("*** AI answer: %s", llm_result.answer)
+        logger.info("*** AI where_fields: %s", llm_result.where_fields)
 
         if not llm_result.jql and not llm_result.answer:
             logger.warning("LLM returned null jql and null answer — returning fallback")
@@ -819,7 +821,7 @@ class AtlasMind:
 
         jira_result = None
         if llm_result.jql:
-            sanitized = self._sanitize_jql(llm_result.jql)
+            sanitized = self._sanitize_jql(llm_result.jql, llm_result.where_fields)
             current_jql = sanitized.jql
             pending_hints = sanitized.hints
 
@@ -1051,7 +1053,7 @@ class AtlasMind:
                             raise _err from parse_exc
 
                     llm_result = JqlResponse(**retry_data)
-                    sanitized = self._sanitize_jql(llm_result.jql or "")
+                    sanitized = self._sanitize_jql(llm_result.jql or "", llm_result.where_fields)
                     current_jql = sanitized.jql
                     pending_hints = sanitized.hints
                     logger.info("*** AI JQL retry[%d]: %s", retry_num, current_jql)
@@ -1061,8 +1063,13 @@ class AtlasMind:
 
         return llm_result, jira_result
 
-    def _sanitize_jql(self, jql: str) -> SanitizeResult:
+    def _sanitize_jql(self, jql: str, where_fields: list[str] | None = None) -> SanitizeResult:
         """Delegate all JQL cleanup passes to JqlSanitizer.
+
+        Args:
+            jql:          Raw LLM-produced JQL string.
+            where_fields: Field display names from JqlResponse.where_fields — used to
+                          resolve which fields are Assets fields without JQL string parsing.
 
         Returns a SanitizeResult with the cleaned JQL string, any auto-corrections
         made (logged), and any ValueHints to inject into the next retry prompt.
@@ -1070,4 +1077,20 @@ class AtlasMind:
         """
         if self.jql_sanitizer is None:
             return SanitizeResult(jql=jql)
-        return self.jql_sanitizer.sanitize(jql)
+
+        hint_asset_ids: frozenset[str] | None = None
+        if where_fields:
+            name_lower_map = self.jql_sanitizer._name_lower_to_id
+            resolved = {
+                name_lower_map[n.lower()]
+                for n in where_fields
+                if n.lower() in name_lower_map
+            }
+            hint_asset_ids = frozenset(resolved & self.asset_field_ids)
+            if hint_asset_ids:
+                logger.info(
+                    "where_fields hint: detected Assets field(s) from LLM response: %s",
+                    [self.jql_sanitizer._id_to_name.get(fid, fid) for fid in hint_asset_ids],
+                )
+
+        return self.jql_sanitizer.sanitize(jql, hint_asset_ids=hint_asset_ids)

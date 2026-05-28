@@ -91,6 +91,13 @@ _JQL_AND_IN_RE = re.compile(
     r"""\s+AND\s+([\w\[\]]+)\s+(NOT\s+IN|IN)\s*\(((?:'[^']*'|"[^"]*"|[^)'"])*)\)""",
     re.IGNORECASE,
 )
+# Matches any field IN (...) or field NOT IN (...) where IN is followed directly by (.
+# Safe against aqlFunction(...) because aqlFunction sits between IN and (, so \( won't
+# match immediately after the operator.  Handles both quoted and unquoted field names.
+_JQL_PLAIN_FIELD_IN_RE = re.compile(
+    r"""(\"[\w\s/,.]+\"|[\w]+)\s+(NOT\s+IN|IN)\s*\(((?:'[^']*'|"[^"]*"|[^)'"])*)\)""",
+    re.IGNORECASE,
+)
 
 
 class ValueCorrection(BaseModel):
@@ -155,11 +162,17 @@ class JqlSanitizer:
         allowed_values: dict[str, list[str]],
         field_value_embeddings: JiraFieldValueEmbeddings,
         model: SentenceTransformer,
+        asset_field_ids: set[str] | None = None,
     ) -> None:
         self._id_to_name = id_to_name
         self._allowed_values = allowed_values
         self._field_value_embeddings = field_value_embeddings
         self._model = model
+        self._asset_field_ids: frozenset[str] = frozenset(asset_field_ids or ())
+        # field_display_name.lower() → field_id; used by the Assets rewrite pass.
+        self._name_lower_to_id: dict[str, str] = {
+            name.lower(): fid for fid, name in id_to_name.items()
+        }
 
         # Normalised allowed values: {field_id_lower: {value_lower: canonical_value}}
         # Used for O(1) exact lookup and casing normalisation.
@@ -179,8 +192,15 @@ class JqlSanitizer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def sanitize(self, jql: str) -> SanitizeResult:
+    def sanitize(self, jql: str, hint_asset_ids: frozenset[str] | None = None) -> SanitizeResult:
         """Apply all cleanup passes to raw LLM-produced JQL.
+
+        Args:
+            jql:            Raw LLM-produced JQL string.
+            hint_asset_ids: Optional set of field IDs that the LLM confirmed are
+                            Assets fields (resolved from JqlResponse.where_fields).
+                            Unioned with self._asset_field_ids for Pass 7 so that
+                            fields not returned by the vector search are still caught.
 
         Returns:
             SanitizeResult containing the cleaned JQL string, any auto-corrections
@@ -233,7 +253,19 @@ class JqlSanitizer:
             logger.info("JQL after numeric dequote: %s", unquoted)
         jql = unquoted
 
-        # Pass 7 — validate values against allowed sets; correct or emit hints.
+        # Pass 7 — rewrite Assets field plain IN (...) to aqlFunction() syntax.
+        # Fires regardless of whether the aqlFunction hint was injected into the prompt,
+        # so LLM-generated plain IN on Assets fields is always corrected before execution.
+        # hint_asset_ids (from JqlResponse.where_fields) is unioned with self._asset_field_ids
+        # so fields absent from the vector search are still caught.
+        effective_asset_ids = self._asset_field_ids | (hint_asset_ids or frozenset())
+        if effective_asset_ids:
+            rewritten = self._rewrite_asset_in_conditions(jql, effective_asset_ids)
+            if rewritten != jql:
+                logger.info("JQL after Assets aqlFunction rewrite: %s", rewritten)
+            jql = rewritten
+
+        # Pass 8 — validate values against allowed sets; correct or emit hints.
         jql, corrections, hints = self._validate_and_correct_values(jql)
 
         return SanitizeResult(jql=jql, corrections=corrections, hints=hints)
@@ -330,6 +362,51 @@ class JqlSanitizer:
             return f"{in_kw} ({', '.join(fixed)})"
 
         return _JQL_IN_CLAUSE_RE.sub(_fix, jql)
+
+    # ------------------------------------------------------------------
+    # Pass 7 — Assets field aqlFunction rewrite
+    # ------------------------------------------------------------------
+
+    def _rewrite_asset_in_conditions(self, jql: str, asset_ids: frozenset[str] | None = None) -> str:
+        """Rewrite plain IN (...) to aqlFunction() for any known Assets field.
+
+        Detects conditions of the form:
+            Domain in ("Sample Object")
+        and rewrites them to:
+            "Domain" IN aqlFunction('Name = "Sample Object"')
+
+        Multiple values become OR clauses inside aqlFunction:
+            "Domain" IN aqlFunction('Name = "A" OR Name = "B"')
+
+        Only fields whose resolved ID is in self._asset_field_ids are rewritten.
+        Conditions already using aqlFunction are never matched (IN aqlFunction
+        has a word between IN and the paren, so _JQL_PLAIN_FIELD_IN_RE won't fire).
+        """
+        def _replace(m: re.Match) -> str:
+            field_raw = m.group(1)
+            op = re.sub(r"\s+", " ", m.group(2).upper())  # normalise NOT  IN → NOT IN
+            values_str = m.group(3)
+
+            field_key = field_raw.strip('"').lower()
+            field_id = self._name_lower_to_id.get(field_key)
+            effective = asset_ids if asset_ids is not None else self._asset_field_ids
+            if not field_id or field_id not in effective:
+                return m.group(0)
+
+            values = re.findall(r"""'([^']*)'|"([^"]*)"|([^\s,)'"]+)""", values_str)
+            clean = [v[0] or v[1] or v[2] for v in values if any(v)]
+            if not clean:
+                return m.group(0)
+
+            canonical = self._id_to_name.get(field_id, field_raw.strip('"'))
+            aql = " OR ".join(f'Name = "{v}"' for v in clean)
+            logger.info(
+                "JQL sanitizer: rewrote Assets field '%s' plain IN → aqlFunction(%s)",
+                canonical, clean,
+            )
+            return f'"{canonical}" {op} aqlFunction(\'{aql}\')'
+
+        return _JQL_PLAIN_FIELD_IN_RE.sub(_replace, jql)
 
     # ------------------------------------------------------------------
     # Phase 2 — value validation and correction

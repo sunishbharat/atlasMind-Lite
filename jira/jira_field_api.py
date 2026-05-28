@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 import httpx
 import requests
-from config.jira_config import _SYSTEM_FIELD_ENDPOINTS, load_active_profile, get_data_dir, build_jira_auth
+from config.jira_config import _SYSTEM_FIELD_TYPES, load_active_profile, get_data_dir, build_jira_auth, get_field_api_base
 from settings import JIRA_FIELDS_FILENAME, JIRA_ALLOWED_VALUES_FILENAME
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 def fetch_and_save_fields(output_path: Path = None) -> Path:
     """Fetch all Jira fields from the active profile and save to a JSON file.
 
-    Calls /rest/api/2/field on the Jira instance defined in config/profiles.json
+    Calls /rest/api/{2|3}/field on the Jira instance defined in config/profiles.json
+    (v3 for Cloud, v2 for Server).
     (active profile). The response list is converted to a dict keyed by field ID
     to match the format expected by _parse_jira_fields_json().
 
@@ -54,7 +55,8 @@ def fetch_and_save_fields(output_path: Path = None) -> Path:
     if output_path is None:
         output_path = get_data_dir(profile["jira_url"]) / JIRA_FIELDS_FILENAME
 
-    url = f"{base_url}/rest/api/2/field"
+    api_base = get_field_api_base(profile.get("jira_type", "server"))
+    url = f"{base_url}{api_base}/field"
     logger.info("Fetching Jira fields from %s", url)
 
     response = requests.get(url, auth=auth, headers={"Accept": "application/json", **auth_headers}, timeout=30)
@@ -75,6 +77,7 @@ async def fetch_field_allowed_values(
     field_type: str,
     auth: tuple[str, str],
     extra_headers: dict | None = None,
+    jira_type: str = "server",
 ) -> list[str]:
     """Retrieve the allowed values for a Jira field via the REST API.
 
@@ -95,7 +98,7 @@ async def fetch_field_allowed_values(
         list[str]: Sorted list of allowed value names. Empty list when the field
         type does not have discrete options.
     """
-    endpoint = _resolve_endpoint(field_id, field_type)
+    endpoint = _resolve_endpoint(field_id, field_type, jira_type)
     if endpoint is None:
         logger.debug("field_id=%s type=%s has no discrete allowed values", field_id, field_type)
         return []
@@ -118,6 +121,9 @@ async def fetch_field_allowed_values(
                 headers=headers,
             )
 
+            if response.status_code == 400:
+                logger.warning("field_id=%s  skipped — field does not support /option endpoint (400)", field_id)
+                return []
             if response.status_code == 401:
                 logger.warning("field_id=%s  skipped — endpoint requires authentication (401)", field_id)
                 return []
@@ -142,15 +148,17 @@ async def fetch_field_allowed_values(
     return result
 
 
-def _resolve_endpoint(field_id: str, field_type: str) -> str | None:
+def _resolve_endpoint(field_id: str, field_type: str, jira_type: str = "server") -> str | None:
     """Return the REST path for the given field, or None if not applicable."""
-    if field_type in _SYSTEM_FIELD_ENDPOINTS:
-        return _SYSTEM_FIELD_ENDPOINTS[field_type]
+    api_base = get_field_api_base(jira_type)
+
+    if field_type in _SYSTEM_FIELD_TYPES:
+        return f"{api_base}/{field_type}"
 
     # Only option and array (multi-select) custom fields support the /option endpoint.
     # version-type custom fields are handled separately via project versions.
     if field_id.startswith("customfield_") and field_type in ("option", "array"):
-        return f"/rest/api/2/field/{field_id}/option"
+        return f"{api_base}/field/{field_id}/option"
 
     return None
 
@@ -159,19 +167,21 @@ async def _fetch_all_version_names(
     base_url: str,
     auth: tuple[str, str] | None,
     auth_headers: dict,
+    jira_type: str = "server",
 ) -> list[str]:
     """Aggregate all version names across every project in the Jira instance.
 
     Used to populate allowed values for version-type custom fields, which have no
     field-level /option endpoint. The returned list is the union of all project versions.
     """
+    api_base = get_field_api_base(jira_type)
     headers = {"Accept": "application/json", **auth_headers}
     base = base_url.rstrip("/")
     all_versions: set[str] = set()
 
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.get(
-            f"{base}/rest/api/2/project",
+            f"{base}{api_base}/project",
             auth=auth if auth and any(auth) else None,
             headers=headers,
         )
@@ -185,7 +195,7 @@ async def _fetch_all_version_names(
         async def _project_versions(key: str) -> list[str]:
             try:
                 r = await client.get(
-                    f"{base}/rest/api/2/project/{key}/versions",
+                    f"{base}{api_base}/project/{key}/versions",
                     auth=auth if auth and any(auth) else None,
                     headers=headers,
                 )
@@ -240,6 +250,7 @@ async def fetch_and_save_allowed_values(
         auth, auth_headers = build_jira_auth(profile)
     else:
         auth_headers = {}
+    jira_type = profile.get("jira_type", "server")
 
     raw: dict = json.loads(fields_json.read_text(encoding="utf-8"))
     has_auth = bool(auth) or bool(auth_headers)
@@ -277,17 +288,27 @@ async def fetch_and_save_allowed_values(
             field_type=field_type,
             auth=auth,
             extra_headers=auth_headers,
+            jira_type=jira_type,
         )
         return field_id, values
 
-    results = await asyncio.gather(*(_fetch(fid, ftype) for fid, ftype in eligible))
+    raw_results = await asyncio.gather(
+        *(_fetch(fid, ftype) for fid, ftype in eligible),
+        return_exceptions=True,
+    )
+    results = []
+    for r in raw_results:
+        if isinstance(r, Exception):
+            logger.warning("Skipping field due to unexpected error during allowed-value fetch: %s", r)
+        else:
+            results.append(r)
 
     allowed: dict[str, list[str]] = {
         field_id: values for field_id, values in results if values
     }
 
     if version_field_ids:
-        version_names = await _fetch_all_version_names(base_url, auth, auth_headers)
+        version_names = await _fetch_all_version_names(base_url, auth, auth_headers, jira_type)
         if version_names:
             logger.info(
                 "Storing %d version names for %d version-type custom fields",

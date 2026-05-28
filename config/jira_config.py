@@ -6,7 +6,10 @@ from core.jira_auth import JiraProfile
 
 _PROFILES_FILE = Path(__file__).parent / "profiles.json"
 
-# System fields that have their own REST endpoints
+# System field types that have their own REST endpoints (path built dynamically per API version)
+_SYSTEM_FIELD_TYPES: frozenset[str] = frozenset({"status", "priority", "resolution", "issuetype"})
+
+# Kept for backward compatibility — prefer get_field_api_base() for new code
 _SYSTEM_FIELD_ENDPOINTS: dict[str, str] = {
     "status":      "/rest/api/2/status",
     "priority":    "/rest/api/2/priority",
@@ -25,6 +28,14 @@ _SEARCH_PATHS: dict[str, str] = {
 
 def get_search_path(jira_type: str) -> str:
     return _SEARCH_PATHS.get(jira_type, _SEARCH_PATHS["server"])
+
+
+def get_field_api_base(jira_type: str) -> str:
+    """Return the REST API base path for field/metadata endpoints.
+
+    Cloud uses v3; Server uses v2.
+    """
+    return "/rest/api/3" if jira_type == "cloud" else "/rest/api/2"
 
 
 def get_data_dir(jira_url: str) -> Path:
