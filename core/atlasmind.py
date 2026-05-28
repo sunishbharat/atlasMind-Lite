@@ -192,6 +192,32 @@ def _strip_field_conditions(jql: str, fields: list[str]) -> str:
     return result.strip()
 
 
+def _remove_bad_value_from_in_clause(jql: str, field: str, bad_value: str) -> str | None:
+    """Remove a single invalid value from an IN/NOT IN clause for the given field.
+
+    Returns the rewritten JQL when at least one valid value remains.
+    Returns None when the field has no IN clause, or when all values were bad
+    (caller should fall back to _strip_field_conditions for the whole clause).
+    """
+    fp = re.escape(field)
+    pattern = re.compile(rf'(\b{fp})\s+(NOT\s+IN|IN)\s*\(([^)]*)\)', re.IGNORECASE)
+    m = pattern.search(jql)
+    if not m:
+        return None
+
+    matched_field = m.group(1)   # original casing from the JQL
+    in_kw = m.group(2)
+    vals_raw = m.group(3)
+    values = [v.strip().strip("'\"") for v in vals_raw.split(",") if v.strip().strip("'\"")]
+    remaining = [v for v in values if v.lower() != bad_value.lower()]
+    if not remaining:
+        return None  # nothing left — signal caller to strip entire condition
+
+    vals_str = ", ".join(f"'{v}'" for v in remaining)
+    rewritten = f"{matched_field} {in_kw} ({vals_str})"
+    return jql[: m.start()] + rewritten + jql[m.end():]
+
+
 def _find_field_rewrite_hint(
     vval: str,
     vfield: str,
@@ -401,6 +427,7 @@ class AtlasMind:
         self.allowed_values: dict[str, list[str]] = {}
         # Populated in run() — None until startup completes.
         self.jql_sanitizer: JqlSanitizer | None = None
+        self.jql_semantic_validator: "JqlSemanticValidator | None" = None
         self.field_value_embeddings: JiraFieldValueEmbeddings | None = None
         self.asset_embeddings: JiraAssetEmbeddings | None = None
         # Field IDs whose values come from Jira Assets (not standard field options).
@@ -522,6 +549,15 @@ class AtlasMind:
             field_value_embeddings=self.field_value_embeddings,
             model=self.document_processor._model,
             asset_field_ids=self.asset_field_ids,
+        )
+
+        from core.jql_semantic_validator import JqlSemanticValidator
+        self.jql_semantic_validator = JqlSemanticValidator(
+            field_embeddings=self.jira_field_embeddings,
+            value_embeddings=self.field_value_embeddings,
+            asset_embeddings=self.asset_embeddings,
+            asset_field_ids=self.asset_field_ids,
+            model=self.document_processor._model,
         )
 
     async def _build_prompt(self, query: str) -> tuple[str, list[str]]:
@@ -812,6 +848,7 @@ class AtlasMind:
         logger.info("*** AI JQL: %s", llm_result.jql)
         logger.info("*** AI answer: %s", llm_result.answer)
         logger.info("*** AI where_fields: %s", llm_result.where_fields)
+        logger.info("*** AI clauses: %s", [(c.field, c.operator, c.value) for c in llm_result.clauses])
 
         if not llm_result.jql and not llm_result.answer:
             logger.warning("LLM returned null jql and null answer — returning fallback")
@@ -821,6 +858,17 @@ class AtlasMind:
 
         jira_result = None
         if llm_result.jql:
+            if self.jql_semantic_validator:
+                validated = await self.jql_semantic_validator.validate(
+                    llm_result.jql, llm_result.clauses or None
+                )
+                if validated.was_modified:
+                    logger.info(
+                        "SemanticValidator: %s → %s",
+                        validated.original_jql, validated.corrected_jql,
+                    )
+                llm_result = JqlResponse(**{**llm_result.model_dump(), "jql": validated.corrected_jql})
+
             sanitized = self._sanitize_jql(llm_result.jql, llm_result.where_fields)
             current_jql = sanitized.jql
             pending_hints = sanitized.hints
@@ -877,7 +925,19 @@ class AtlasMind:
                     if value_errors:
                         field_rewrite_hints: list[str] = []
                         for vfield, vval in value_errors:
-                            logger.warning("  retry[%d] Invalid value %r for field %r — stripping condition", retry_num, vval, vfield)
+                            rewritten = _remove_bad_value_from_in_clause(current_jql, vfield, vval)
+                            if rewritten is not None:
+                                logger.warning(
+                                    "  retry[%d] Invalid value %r for field %r — removed from IN clause",
+                                    retry_num, vval, vfield,
+                                )
+                                current_jql = rewritten
+                            else:
+                                logger.warning(
+                                    "  retry[%d] Invalid value %r for field %r — stripping condition",
+                                    retry_num, vval, vfield,
+                                )
+                                current_jql = _strip_field_conditions(current_jql, [vfield])
                             hint = _find_field_rewrite_hint(
                                 vval, vfield, retry_num,
                                 self.field_value_embeddings,
@@ -885,8 +945,6 @@ class AtlasMind:
                             )
                             if hint:
                                 field_rewrite_hints.append(hint)
-
-                        current_jql = _strip_field_conditions(current_jql, [f for f, _ in value_errors])
                         logger.info("  retry[%d] JQL after value strip: %s", retry_num, current_jql)
 
                         # Guard: if stripping removed every WHERE condition the query would

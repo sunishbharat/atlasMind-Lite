@@ -20,7 +20,7 @@ OLLAMA_MODEL       = os.getenv("JQL_LOCAL_MODEL",  "qwen2.5:3b-instruct-q4_K_M")
 OLLAMA_TEMPERATURE    = float(os.getenv("JQL_OLLAMA_TEMPERATURE",  "0.1"))
 OLLAMA_TIMEOUT        = int(os.getenv("JQL_OLLAMA_TIMEOUT",        "240"))
 OLLAMA_NUM_CTX        = int(os.getenv("JQL_OLLAMA_NUM_CTX",        "2048"))
-OLLAMA_NUM_PREDICT    = int(os.getenv("JQL_OLLAMA_NUM_PREDICT",    "512"))
+OLLAMA_NUM_PREDICT    = int(os.getenv("JQL_OLLAMA_NUM_PREDICT",    "768"))
 OLLAMA_NUM_THREAD     = int(os.getenv("JQL_OLLAMA_NUM_THREAD",     "4"))
 OLLAMA_NUM_BATCH      = int(os.getenv("JQL_OLLAMA_NUM_BATCH",      "256"))
 OLLAMA_TOP_P          = float(os.getenv("JQL_OLLAMA_TOP_P",        "0.5"))
@@ -46,7 +46,7 @@ GROQ_API_KEY    = resolve_secret("GROQ_API_KEY_OCID", "GROQ_API_KEY")
 GROQ_MODEL      = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.1"))
 GROQ_TIMEOUT    = int(os.getenv("GROQ_TIMEOUT", "30"))
-GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "500"))
+GROQ_MAX_TOKENS = int(os.getenv("GROQ_MAX_TOKENS", "650"))
 
 # -- Anthropic Claude direct API ---------------------------------------
 # CLAUDE_API_KEY_OCID: set this to your OCI Vault secret OCID on cloud deployments.
@@ -55,7 +55,7 @@ CLAUDE_API_KEY     = resolve_secret("CLAUDE_API_KEY_OCID", "ANTHROPIC_API_KEY")
 CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
 CLAUDE_TEMPERATURE = float(os.getenv("CLAUDE_TEMPERATURE", "0.1"))
 CLAUDE_TIMEOUT     = int(os.getenv("CLAUDE_TIMEOUT", "30"))
-CLAUDE_MAX_TOKENS  = int(os.getenv("CLAUDE_MAX_TOKENS", "500"))
+CLAUDE_MAX_TOKENS  = int(os.getenv("CLAUDE_MAX_TOKENS", "650"))
 
 # -- Anthropic Claude via AWS Bedrock custom gateway --------------------
 # AWS_BEARER_TOKEN_BEDROCK: bearer token for the Bedrock-compatible endpoint.
@@ -66,7 +66,7 @@ BEDROCK_REGION     = os.getenv("BEDROCK_REGION", "custom")
 BEDROCK_MODEL      = os.getenv("BEDROCK_MODEL", "claude-sonnet-4.6")
 BEDROCK_TEMPERATURE = float(os.getenv("BEDROCK_TEMPERATURE", "0.1"))
 BEDROCK_TIMEOUT    = int(os.getenv("BEDROCK_TIMEOUT", "30"))
-BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "500"))
+BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "650"))
 
 # -- pgvector / Embeddings ---------------------------------------------
 DATABASE_URL         = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/jql_vectordb")
@@ -89,6 +89,9 @@ JIRA_FIELD_SEARCH_LIMIT      = 5
 # -- Jira field value embeddings (one row per allowed value per field) ----------------
 JIRA_FIELD_VALUES_TABLE         = "jira_field_values"
 JIRA_FIELD_VALUES_COL_EMBEDDING = "embedding"
+# Cosine distance threshold for field name correction in JqlSemanticValidator.
+# Matches below this value are accepted; above it the clause is left unchanged.
+SEMANTIC_FIELD_THRESHOLD        = float(os.getenv("SEMANTIC_FIELD_THRESHOLD", "0.45"))
 # L2 distance threshold below which a single candidate is auto-corrected without LLM.
 VALUE_AUTO_CORRECT_THRESHOLD    = float(os.getenv("VALUE_AUTO_CORRECT_THRESHOLD", "0.15"))
 # L2 distance threshold below which candidates are emitted as LLM retry hints.

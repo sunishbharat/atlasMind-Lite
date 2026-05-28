@@ -23,9 +23,28 @@ class RouteResult(BaseModel):
         return self.type == "raw"
 
 
+class LlmClause(BaseModel):
+    """One WHERE condition as reported by the LLM in its clauses[] output."""
+    field:    str
+    operator: str
+    value:    str | list[str] | None = None
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def _coerce_value(cls, v: Any) -> str | list[str] | None:
+        # LLM sometimes returns a bare int/float for numeric comparisons instead of null.
+        # Treat them as null — numeric values are not correctable by the semantic validator.
+        if isinstance(v, (int, float)):
+            return None
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        return v
+
+
 class JqlResponse(BaseModel):
     """Structured output from the LLM for a JQL query."""
     jql:           str | None            = None
+    clauses:       list[LlmClause]       = []
     chart_spec:    dict[str, Any] | None = None
     answer:        str | None            = None
     intent_fields: list[str] | None      = None

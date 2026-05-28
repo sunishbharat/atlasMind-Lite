@@ -55,6 +55,11 @@ _JQL_IN_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 _JQL_LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+", re.IGNORECASE)
+# JQL pseudo-values that Jira accepts in queries but never appear in the REST API's
+# allowed-values endpoint. Without this bypass the value validator would strip them.
+_JQL_PSEUDO_VALUES: dict[str, set[str]] = {
+    "resolution": {"unresolved"},
+}
 _JQL_ARITHMETIC_ORDER_RE = re.compile(
     r"\s+ORDER\s+BY\s+\S+\s*[-+]\s*.*$", re.IGNORECASE
 )
@@ -348,7 +353,12 @@ class JqlSanitizer:
         """Quote unquoted multi-word values inside IN (...) clauses."""
         def _fix(m: re.Match) -> str:
             in_kw = m.group(1)
-            parts = [p.strip() for p in m.group(2).split(",") if p.strip()]
+            raw_vals = m.group(2)
+            # Skip IN clauses whose value list contains a function call — splitting on
+            # commas would corrupt nested expressions like issueFunction in linkedIssuesOf(...).
+            if "(" in raw_vals:
+                return m.group(0)
+            parts = [p.strip() for p in raw_vals.split(",") if p.strip()]
             fixed: list[str] = []
             for p in parts:
                 if (p.startswith('"') and p.endswith('"')) or (
@@ -433,6 +443,11 @@ class JqlSanitizer:
             rewrites the condition in the next retry using the candidate list.
             """
             field_key = field_raw.lower()
+
+            # Bypass validation for Jira pseudo-values (e.g. resolution = Unresolved).
+            if value.lower() in _JQL_PSEUDO_VALUES.get(field_key, set()):
+                return value, None, None
+
             value_map = self._normed.get(field_key)
 
             if value_map is None:
