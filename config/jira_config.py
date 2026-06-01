@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 from settings import DATA_DIR
@@ -24,6 +25,13 @@ _SEARCH_PATHS: dict[str, str] = {
     "cloud":  "/rest/api/3/search/jql",
     "server": "/rest/api/2/search",
 }
+
+
+def _load_profiles_data() -> dict:
+    raw = os.getenv("JIRA_PROFILES_JSON")
+    if raw:
+        return json.loads(raw)
+    return json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
 
 
 def get_search_path(jira_type: str) -> str:
@@ -91,7 +99,7 @@ def load_active_profile() -> dict:
         FileNotFoundError: If profiles.json does not exist.
         KeyError: If the default profile name is not found in profiles.
     """
-    data = json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
+    data = _load_profiles_data()
     default = data["default"]
     profile = data["profiles"][default]
     return {"name": default, **profile}
@@ -108,7 +116,7 @@ def load_active_jira_profile() -> JiraProfile:
         KeyError: If the default profile name is not found in profiles.
         ValidationError: If the profile fields fail Pydantic validation.
     """
-    data = json.loads(_PROFILES_FILE.read_text(encoding="utf-8"))
+    data = _load_profiles_data()
     default = data["default"]
     profile = data["profiles"][default]
     return JiraProfile(name=default, **profile)

@@ -119,13 +119,29 @@ MAX_VALUES_FOR_EMBEDDING     = int(os.getenv("MAX_VALUES_FOR_EMBEDDING", "50"))
 
 # Field IDs to exclude from embedding regardless of type.
 # Add custom fields that are internal, deprecated, or irrelevant to JQL queries.
-JIRA_FIELD_IGNORE_IDS: set[str] = {}
+# Example: JIRA_FIELD_IGNORE_IDS=customfield_10200,customfield_10300
+JIRA_FIELD_IGNORE_IDS: set[str] = set(
+    f.strip() for f in os.getenv("JIRA_FIELD_IGNORE_IDS", "").split(",") if f.strip()
+)
 
 # -- JQL annotation file -----------------------------------------------
 DEFAULT_ANNOTATION_FILE = (
     os.getenv("JQL_ANNOTATION_FILE")
     or str(_ROOT / "data" / "jira_jql_annotated_queries.md")
 )
+
+_ANNOTATION_URL = os.getenv("JQL_ANNOTATION_URL")
+if _ANNOTATION_URL:
+    import tempfile as _tempfile
+    from cloud.config_fetcher import fetch_to_file as _fetch
+    _ann_tmp = Path(_tempfile.gettempdir()) / "jira_jql_annotated_queries.md"
+    _fetch(
+        _ANNOTATION_URL,
+        _ann_tmp,
+        username=os.getenv("CONFIG_REGISTRY_USER", ""),
+        token=os.getenv("CONFIG_REGISTRY_TOKEN", ""),
+    )
+    DEFAULT_ANNOTATION_FILE = str(_ann_tmp)
 
 # -- Data directory (domain-scoped subdirs are created inside here) ----
 DATA_DIR = _ROOT / "data"
