@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
+from cloud.tls import tls
 from config.jira_config import get_search_path
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class JiraSearchClient:
         resolved_auth = auth if auth and any(auth) else None
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with tls.httpx_client(timeout=15) as client:
                 if jira_type == "cloud":
                     response = await client.post(
                         url,
@@ -184,7 +185,7 @@ class JiraSearchClient:
         auth_headers: dict[str, str],
     ) -> JiraPage:
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with tls.httpx_client(timeout=30) as client:
                 response = await client.post(
                     url,
                     json=body,
@@ -219,7 +220,7 @@ class JiraSearchClient:
     ) -> JiraPage:
         params = {"jql": jql, "startAt": start_at, "maxResults": page_size, "fields": fields}
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with tls.httpx_client(timeout=30) as client:
                 response = await client.get(
                     url,
                     params=params,

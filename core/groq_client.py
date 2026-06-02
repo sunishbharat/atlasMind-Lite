@@ -1,5 +1,6 @@
 import httpx
 import logging
+from cloud.tls import tls
 from settings import GROQ_API_KEY, GROQ_MODEL, GROQ_TEMPERATURE, GROQ_TIMEOUT, GROQ_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class GroqClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with tls.httpx_client(timeout=timeout) as client:
                 response = await client.post(
                     _GROQ_URL,
                     json=payload,

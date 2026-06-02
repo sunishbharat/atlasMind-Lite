@@ -22,7 +22,7 @@ import pytest
 @pytest.fixture
 def settings_restored():
     yield
-    for key in ("CA_BUNDLE_B64", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
+    for key in ("CA_BUNDLE_B64", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "AWS_CA_BUNDLE"):
         os.environ.pop(key, None)
     with patch("cloud.oci_vault.resolve_secret", return_value=""):
         import settings
@@ -130,7 +130,7 @@ class TestFetchToFileSSL:
             return self._mock_resp()
 
         try:
-            with patch("cloud.config_fetcher.ssl.create_default_context", return_value=mock_ctx), \
+            with patch("cloud.tls.ssl.create_default_context", return_value=mock_ctx), \
                  patch("cloud.config_fetcher.urlopen", side_effect=fake_urlopen):
                 fetch_to_file("https://registry.example.com/file.txt", dest)
         finally:

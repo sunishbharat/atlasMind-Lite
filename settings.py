@@ -127,13 +127,18 @@ JIRA_FIELD_IGNORE_IDS: set[str] = set(
 # -- CA certificate for outbound TLS (CF / proxy environments) ---------
 # Set CA_BUNDLE_B64 to a base64-encoded PEM certificate.
 # Decoded at startup so all outbound HTTPS calls trust the proxy CA.
+# CA_BUNDLE_PATH is exported so cloud/tls.py and tests can reference it.
+CA_BUNDLE_PATH: "str | None" = None
+
 _ca_b64 = os.getenv("CA_BUNDLE_B64", "")
 if _ca_b64:
     import base64 as _base64
     _ca_path = Path("/tmp/ca-bundle.pem")
     _ca_path.write_bytes(_base64.b64decode(_ca_b64))
-    os.environ.setdefault("REQUESTS_CA_BUNDLE", str(_ca_path))
-    os.environ.setdefault("SSL_CERT_FILE", str(_ca_path))
+    CA_BUNDLE_PATH = str(_ca_path)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", CA_BUNDLE_PATH)
+    os.environ.setdefault("SSL_CERT_FILE", CA_BUNDLE_PATH)
+    os.environ.setdefault("AWS_CA_BUNDLE", CA_BUNDLE_PATH)  # boto3/botocore
 
 # -- JQL annotation file -----------------------------------------------
 DEFAULT_ANNOTATION_FILE = (

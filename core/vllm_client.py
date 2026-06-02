@@ -2,6 +2,7 @@ import httpx
 import logging
 import requests
 from requests.exceptions import ConnectionError as RequestsConnectionError
+from cloud.tls import tls
 from settings import (
     VLLM_URL, VLLM_MODEL, VLLM_TEMPERATURE, VLLM_TIMEOUT,
     VLLM_MAX_TOKENS, VLLM_API_KEY,
@@ -72,7 +73,7 @@ class VllmClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with tls.httpx_client(timeout=timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     json=payload,

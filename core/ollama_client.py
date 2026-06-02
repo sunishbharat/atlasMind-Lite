@@ -7,6 +7,7 @@ from settings import (
 from requests.exceptions import ConnectionError, Timeout
 import logging
 import httpx
+from cloud.tls import tls
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class OllamaClient:
         timeout = httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=5.0)
         logger.info(f"Ollama client generating response using model : {self.model}")
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with tls.httpx_client(timeout=timeout) as client:
                 response = await client.post(
                     self.url,
                     json={"model": self.model, "prompt": prompt, "stream": False, "options": self.options},

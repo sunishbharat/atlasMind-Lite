@@ -1,7 +1,9 @@
 import logging
 
 import anthropic
+import httpx
 
+from cloud.tls import tls
 from settings import (
     CLAUDE_API_KEY, CLAUDE_MODEL, CLAUDE_TEMPERATURE, CLAUDE_TIMEOUT, CLAUDE_MAX_TOKENS,
 )
@@ -54,7 +56,10 @@ class ClaudeClient:
             user_text = prompt
 
         try:
-            client = anthropic.AsyncAnthropic(api_key=self.api_key)
+            client = anthropic.AsyncAnthropic(
+                api_key=self.api_key,
+                http_client=tls.httpx_client(),
+            )
             kwargs: dict = dict(
                 model=self.model,
                 max_tokens=self.max_tokens,

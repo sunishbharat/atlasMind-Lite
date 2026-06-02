@@ -94,7 +94,7 @@ class TestFetchAllVersionNamesApiVersion:
             mock_resp.json.return_value = []
             return mock_resp
 
-        with patch("jira.jira_field_api.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud.tls.httpx.AsyncClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -120,7 +120,7 @@ class TestFetchAllVersionNamesApiVersion:
             mock_resp.json.return_value = []
             return mock_resp
 
-        with patch("jira.jira_field_api.httpx.AsyncClient") as mock_client_cls:
+        with patch("cloud.tls.httpx.AsyncClient") as mock_client_cls:
             mock_client = MagicMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)

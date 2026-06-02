@@ -23,6 +23,7 @@ from pathlib import Path
 
 import httpx
 
+from cloud.tls import tls
 from config.jira_config import build_jira_auth, get_data_dir, load_active_profile
 from settings import JIRA_ASSETS_CONFIG_FILE, JIRA_ASSETS_FILENAME, JIRA_FIELDS_FILENAME
 
@@ -121,7 +122,7 @@ async def fetch_asset_object_labels(
     labels: list[str] = []
     page = 1
 
-    async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
+    async with tls.httpx_client(timeout=60, follow_redirects=False) as client:
         while True:
             resp = await client.get(
                 f"{base}/rest/assets/1.0/object/aql",

@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 import httpx
 import requests
+from cloud.tls import tls
 from config.jira_config import _SYSTEM_FIELD_TYPES, load_active_profile, get_data_dir, build_jira_auth, get_field_api_base
 from settings import JIRA_FIELDS_FILENAME, JIRA_ALLOWED_VALUES_FILENAME
 
@@ -111,7 +112,7 @@ async def fetch_field_allowed_values(
     all_values: list[str] = []
     start_at = 0
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with tls.httpx_client(timeout=30) as client:
         while True:
             params = {"startAt": start_at, "maxResults": 100} if is_paginated else {}
             response = await client.get(
@@ -179,7 +180,7 @@ async def _fetch_all_version_names(
     base = base_url.rstrip("/")
     all_versions: set[str] = set()
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with tls.httpx_client(timeout=60) as client:
         resp = await client.get(
             f"{base}{api_base}/project",
             auth=auth if auth and any(auth) else None,
