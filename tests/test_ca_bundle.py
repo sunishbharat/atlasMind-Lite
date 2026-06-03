@@ -52,20 +52,22 @@ class TestCaBundleSettings:
                     os.environ[k] = v
 
     def test_valid_b64_writes_pem_and_sets_env(self, settings_restored, tmp_path):
-        """Valid CA_BUNDLE_B64 must decode and set REQUESTS_CA_BUNDLE + SSL_CERT_FILE."""
+        """Valid CA_BUNDLE_B64 must decode and set REQUESTS_CA_BUNDLE + SSL_CERT_FILE.
+
+        Cert injection moved to cloud/tls._init_ca_bundle(); called directly here.
+        """
         encoded = base64.b64encode(b"placeholder-cert-content").decode()
         os.environ["CA_BUNDLE_B64"] = encoded
         os.environ.pop("REQUESTS_CA_BUNDLE", None)
         os.environ.pop("SSL_CERT_FILE", None)
 
-        with patch("cloud.oci_vault.resolve_secret", return_value=""), \
-             patch("builtins.open", MagicMock()), \
-             patch("settings.Path") as MockPath:
-            mock_file = MagicMock()
-            MockPath.return_value = mock_file
-            MockPath.side_effect = lambda *a, **k: Path(*a, **k)
-            import settings
-            importlib.reload(settings)
+        from cloud.tls import _init_ca_bundle
+
+        def _patched_path(s):
+            return tmp_path / "ca-bundle.pem" if str(s) == "/tmp/ca-bundle.pem" else Path(s)
+
+        with patch("cloud.tls.Path", _patched_path):
+            _init_ca_bundle()
 
         assert os.getenv("REQUESTS_CA_BUNDLE") is not None
         assert os.getenv("SSL_CERT_FILE") is not None
