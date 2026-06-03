@@ -3,8 +3,9 @@
 CA bundle injection (runs once at import time via _init_ca_bundle):
   1. CA_BUNDLE_B64 env var — single base64-encoded PEM (local override, small certs)
   2. VCAP_SERVICES CredHub bindings — chunked CA bundle for CF deployments where the
-     bundle is too large for a single env var; services named ca-bundle-01..N are
-     reassembled in sorted order
+     bundle is too large for a single env var; any CredHub service whose credentials
+     contain a `ca-certificates` key is treated as a chunk; services are sorted by name
+     before concatenation, so names must sort in the intended chunk order
   3. Neither set → system CAs (local dev, AWS, OCI)
 
 All outbound HTTPS clients (httpx, requests, boto3) pick up the cert automatically
@@ -44,13 +45,12 @@ def _init_ca_bundle() -> None:
         vcap = json.loads(vcap_raw)
         svcs = sorted(
             [s for s in vcap.get("credhub", [])
-             if s.get("name", "").startswith("ca-bundle-")],
+             if s.get("credentials", {}).get("ca-certificates")],
             key=lambda s: s["name"],
         )
         chunks = [
-            base64.b64decode(s["credentials"]["ca_bundle_b64"])
+            s["credentials"]["ca-certificates"].encode()
             for s in svcs
-            if s.get("credentials", {}).get("ca_bundle_b64")
         ]
         if chunks:
             ca_path = Path("/tmp/ca-bundle.pem")

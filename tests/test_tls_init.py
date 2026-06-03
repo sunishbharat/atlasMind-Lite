@@ -33,8 +33,10 @@ _ENV_KEYS = (
 # ---------------------------------------------------------------------------
 
 def _make_vcap(n: int, *, shuffle: bool = False) -> str:
-    """Build a VCAP_SERVICES JSON string with n ca-bundle-XX CredHub services.
+    """Build a VCAP_SERVICES JSON string with n CredHub services.
 
+    Each service carries a `ca-certificates` key with raw PEM text (the
+    industry-standard CF CredHub format — no base64 encoding needed for PEM).
     When shuffle=True the services list is in reversed order to verify that
     the code sorts by name before concatenating.
     """
@@ -45,9 +47,7 @@ def _make_vcap(n: int, *, shuffle: bool = False) -> str:
         {
             "name": f"ca-bundle-{i:02d}",
             "credentials": {
-                "ca_bundle_b64": base64.b64encode(
-                    f"chunk-{i:02d}-content".encode()
-                ).decode()
+                "ca-certificates": f"chunk-{i:02d}-content",
             },
         }
         for i in indices
@@ -199,8 +199,9 @@ class TestVcap8Services:
 
         assert tls_env.read_bytes() == _expected(8)
 
-    def test_non_ca_bundle_services_excluded(self, tls_env, monkeypatch):
-        """Unrelated CredHub entries (secrets, DB URLs) must not contribute bytes."""
+    def test_services_without_ca_bundle_b64_credential_excluded(self, tls_env, monkeypatch):
+        """CredHub services with no ca_bundle_b64 credential must not contribute bytes.
+        Exclusion is by credential key, not by service name."""
         extra = [
             {"name": "atlasmind-secrets", "credentials": {"GROQ_API_KEY": "secret"}},
             {"name": "db-service",        "credentials": {"url": "postgresql://..."}},
@@ -213,16 +214,26 @@ class TestVcap8Services:
 
         assert tls_env.read_bytes() == _expected(8)
 
+    def test_any_service_name_with_credential_is_included(self, tls_env, monkeypatch):
+        """A service NOT named ca-bundle-* but carrying ca-certificates must be included."""
+        services = [
+            {
+                "name": f"corp-cert-{i:02d}",
+                "credentials": {"ca-certificates": f"chunk-{i:02d}-content"},
+            }
+            for i in range(1, 9)
+        ]
+        monkeypatch.setenv("VCAP_SERVICES", json.dumps({"credhub": services}))
+
+        _init_ca_bundle()
+
+        assert tls_env.read_bytes() == _expected(8)
+
     def test_service_missing_credential_key_is_skipped(self, tls_env, monkeypatch):
-        """A service bound without ca_bundle_b64 must be silently skipped."""
+        """A service bound without ca-certificates must be silently skipped."""
         services = [
             {"name": "ca-bundle-01", "credentials": {}},  # missing key
-            {
-                "name": "ca-bundle-02",
-                "credentials": {
-                    "ca_bundle_b64": base64.b64encode(b"chunk-02-content").decode()
-                },
-            },
+            {"name": "ca-bundle-02", "credentials": {"ca-certificates": "chunk-02-content"}},
         ]
         monkeypatch.setenv("VCAP_SERVICES", json.dumps({"credhub": services}))
 
