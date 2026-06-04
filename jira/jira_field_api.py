@@ -60,7 +60,7 @@ def fetch_and_save_fields(output_path: Path = None) -> Path:
     url = f"{base_url}{api_base}/field"
     logger.info("Fetching Jira fields from %s", url)
 
-    response = requests.get(url, auth=auth, headers={"Accept": "application/json", **auth_headers}, timeout=30, verify=tls.verify)
+    response = requests.get(url, auth=auth, headers={"Accept": "application/json", **auth_headers}, timeout=30, verify=tls.verify, cert=tls.client_cert)
     response.raise_for_status()
 
     fields_list: list[dict] = response.json()
