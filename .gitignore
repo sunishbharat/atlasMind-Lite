@@ -199,6 +199,7 @@ cython_debug/
 # Markdown files (except README.md and the JQL annotation file)
 *.md
 !README.md
+!CONTRIBUTING.md
 !data/jira_jql_annotated_queries.md
 !src/system_prompt.md
 !config/system_prompt.md
