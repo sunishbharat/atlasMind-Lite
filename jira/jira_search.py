@@ -147,19 +147,23 @@ class JiraSearchClient:
                 "Jira Cloud page: pageSize=%d got=%d accumulated=%d total=%d nextToken=%s",
                 page_size, len(page.issues), len(issues), total, bool(page.next_page_token),
             )
+            if total == 0 and page.issues:
+                # Jira Cloud v3 cursor pagination does not always populate `total`; rely on nextPageToken
+                logger.debug("Jira Cloud v3 returned total=0 with %d issues ", len(page.issues))
 
-            if not page.issues or not page.next_page_token or len(issues) >= total:
+            if not page.issues or not page.next_page_token or (total > 0 and len(issues) >= total):
                 break
             next_page_token = page.next_page_token
 
-        if total == 0 and not issues:
+        reported_total = total if total > 0 else len(issues)
+        if reported_total == 0:
             logger.warning(
                 "Jira Cloud returned 0 results for JQL %r - if results are expected, verify credentials "
                 "(Jira Cloud returns HTTP 200 with total=0 on auth failure rather than 401)",
                 request.jql,
             )
-        logger.info("Jira Cloud search done: fetched=%d total=%d", len(issues), total)
-        return JiraSearchResult(jql=request.jql, issues=issues, total=total, fetched=len(issues))
+        logger.info("Jira Cloud search done: fetched=%d total=%d", len(issues), reported_total)
+        return JiraSearchResult(jql=request.jql, issues=issues, total=reported_total, fetched=len(issues))
 
     async def _search_server(self, request: JiraSearchRequest) -> JiraSearchResult:
         url = f"{request.base_url}{request.resolved_search_path()}"
