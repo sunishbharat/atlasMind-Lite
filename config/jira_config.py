@@ -83,6 +83,12 @@ def build_jira_auth(profile: dict) -> tuple:
 
     if jira_type == "server" and token:
         return None, {"Authorization": f"Bearer {token}"}
+    if jira_type == "cloud" and token and not email:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Jira Cloud Basic auth — token is set but email is empty; request will be unauthenticated"
+        )
+        return None, {}
     if email and token:
         return (email, token), {}
     return None, {}

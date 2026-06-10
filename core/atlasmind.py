@@ -730,6 +730,13 @@ class AtlasMind:
         logger.info("Jira base URL: %s (source: %s)", base_url, "header" if jira_url and base_url == jira_url.rstrip("/") else "profile")
         credential = profile.resolve_auth(token_override=jira_token)
         auth, auth_headers = credential.auth, credential.headers
+        logger.info(
+            "Jira auth: profile=%r type=%s authenticated=%s method=%s",
+            profile.name,
+            profile.jira_type,
+            credential.is_authenticated,
+            "basic" if auth else ("bearer" if auth_headers.get("Authorization") else "none"),
+        )
 
         all_fields = self.field_resolver.build_fields_param(
             self.standard_field_ids, extra_field_ids

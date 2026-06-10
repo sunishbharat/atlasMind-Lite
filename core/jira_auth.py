@@ -61,9 +61,24 @@ class JiraProfile(BaseModel):
         token_override takes precedence — used for per-request PATs from X-Jira-Token.
         Falls back to the profile-configured token, then JIRA_TOKEN env var, then unauthenticated.
         """
-        token = token_override or self.token or os.getenv("JIRA_TOKEN", "")
+        if token_override:
+            token = token_override
+            token_source = "X-Jira-Token header"
+        elif self.token:
+            token = self.token
+            token_source = f"profile '{self.name}'"
+        else:
+            token = os.getenv("JIRA_TOKEN", "")
+            token_source = "JIRA_TOKEN env var" if token else "none"
+        logger.debug("Jira auth token source: %s", token_source)
         if self.jira_type == JiraAuthType.server and token:
             return JiraCredential(headers={"Authorization": f"Bearer {token}"})
+        if self.jira_type == JiraAuthType.cloud and token and not self.email:
+            logger.warning(
+                "Jira Cloud Basic auth — token is set but email is empty in profile %r; authentication FAILED",
+                self.name,
+            )
+            return JiraCredential()
         if self.email and token:
             return JiraCredential(auth=(self.email, token))
         logger.warning("No Jira credentials resolved — request will be unauthenticated")

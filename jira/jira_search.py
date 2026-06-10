@@ -97,6 +97,15 @@ class JiraSearchClient:
                         headers=base_headers,
                     )
                 response.raise_for_status()
+            payload = response.json()
+            if payload.get("warningMessages") or (
+                jira_type == "cloud"
+                and payload.get("total", -1) == 0
+                and not (auth_headers or resolved_auth)
+            ):
+                logger.warning(
+                    "JQL validation returned 0 results with no credentials — possible silent auth failure"
+                )
             return None
         except httpx.HTTPStatusError as exc:
             if exc.response.is_redirect:
@@ -143,6 +152,12 @@ class JiraSearchClient:
                 break
             next_page_token = page.next_page_token
 
+        if total == 0 and not issues:
+            logger.warning(
+                "Jira Cloud returned 0 results for JQL %r - if results are expected, verify credentials "
+                "(Jira Cloud returns HTTP 200 with total=0 on auth failure rather than 401)",
+                request.jql,
+            )
         logger.info("Jira Cloud search done: fetched=%d total=%d", len(issues), total)
         return JiraSearchResult(jql=request.jql, issues=issues, total=total, fetched=len(issues))
 
