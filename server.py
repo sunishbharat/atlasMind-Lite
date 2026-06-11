@@ -265,7 +265,7 @@ async def query_post(
     if not request.request_id:
         logger.warning("[cancel] POST /query has no request_id — cancel will not work for this query")
 
-    task = asyncio.create_task(_atlasmind.generate_jql(request.query, jira_token=jira_token, jira_url=jira_url))
+    task = asyncio.create_task(_atlasmind.generate_jql(request.query, jira_token=jira_token, jira_url=jira_url, limit=request.limit))
     if token:
         token.attach(task)
 

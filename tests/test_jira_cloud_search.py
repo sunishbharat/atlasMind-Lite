@@ -109,6 +109,50 @@ class TestCloudSearchTotalPopulated:
         fetch_mock.assert_called_once()
 
 
+class TestCloudSearchMaxResultsLimit:
+    """max_results must act as a hard cap regardless of total=0 + endless nextToken."""
+
+    @pytest.mark.asyncio
+    async def test_stops_at_max_results_when_total_zero(self):
+        """Simulates the infinite-loop bug: total=0, nextToken always present.
+        The loop must stop once max_results issues are accumulated."""
+        def _page_with_token(n: int, token: str) -> JiraPage:
+            return JiraPage(
+                issues=[_fake_issue(f"ABCD-{n*100+i}") for i in range(10)],
+                total=0,
+                start_at=0,
+                max_results=10,
+                next_page_token=token,
+            )
+
+        # Every call returns 10 issues and a fresh nextToken — never ends without the cap.
+        fetch_mock = AsyncMock(side_effect=[_page_with_token(i, f"tok-{i+1}") for i in range(20)])
+
+        client = JiraSearchClient()
+        with patch.object(client, "_fetch_page_cloud", new=fetch_mock):
+            result = await client._search_cloud(_make_request(max_results=10))
+
+        assert result.fetched == 10
+        assert fetch_mock.call_count == 1  # exactly one page needed for max_results=10
+
+    @pytest.mark.asyncio
+    async def test_stops_at_max_results_across_multiple_pages(self):
+        """max_results=25 with 10 issues per page: must stop after 3 pages (10+10+5)."""
+        pages = [
+            JiraPage(issues=[_fake_issue(f"ABCD-{i}") for i in range(10)],   total=0, start_at=0, max_results=10, next_page_token="tok-1"),
+            JiraPage(issues=[_fake_issue(f"ABCD-{i}") for i in range(10, 20)], total=0, start_at=0, max_results=10, next_page_token="tok-2"),
+            JiraPage(issues=[_fake_issue(f"ABCD-{i}") for i in range(20, 25)], total=0, start_at=0, max_results=5,  next_page_token="tok-3"),
+        ]
+        fetch_mock = AsyncMock(side_effect=pages)
+
+        client = JiraSearchClient()
+        with patch.object(client, "_fetch_page_cloud", new=fetch_mock):
+            result = await client._search_cloud(_make_request(max_results=25))
+
+        assert result.fetched == 25
+        assert fetch_mock.call_count == 3
+
+
 class TestCloudSearchTrueEmpty:
     """Genuine zero-result query - not a silent auth failure, but truly no issues."""
 

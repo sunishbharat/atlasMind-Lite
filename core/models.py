@@ -3,7 +3,7 @@ models.py — Pydantic request/response models for the aMind API.
 """
 
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RouteResult(BaseModel):
@@ -49,6 +49,15 @@ class JqlResponse(BaseModel):
     answer:        str | None            = None
     intent_fields: list[str] | None      = None
     where_fields:  list[str] | None      = None  # display names of fields used in WHERE clause
+    limit:         int | None            = None  # user-specified result count extracted from query
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def _coerce_limit(cls, v: Any) -> int | None:
+        # LLM may return 0 or a negative integer — treat anything < 1 as null.
+        if isinstance(v, int) and v >= 1:
+            return v
+        return None
 
 
 class ChartSpec(BaseModel):
@@ -89,7 +98,7 @@ class ServerMeta(BaseModel):
 class QueryRequest(BaseModel):
     query:      str
     profile:    Optional[str] = None
-    limit:      Optional[int] = None
+    limit:      Optional[int] = Field(default=None, ge=1)
     request_id: Optional[str] = None  # client-generated UUID; used by POST /event to cancel
 
 

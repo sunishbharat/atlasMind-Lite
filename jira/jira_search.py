@@ -151,7 +151,9 @@ class JiraSearchClient:
                 # Jira Cloud v3 cursor pagination does not always populate `total`; rely on nextPageToken
                 logger.debug("Jira Cloud v3 returned total=0 with %d issues ", len(page.issues))
 
-            if not page.issues or not page.next_page_token or (total > 0 and len(issues) >= total):
+            if not page.issues or not page.next_page_token or len(issues) >= request.max_results:
+                break
+            if total > 0 and len(issues) >= total:
                 break
             next_page_token = page.next_page_token
 

@@ -55,8 +55,8 @@ logger = logging.getLogger(__name__)
 # Negative lookahead excludes time quantities ("last 20 days", "first 7 weeks").
 # Groups: (prefix-qualified N) | (suffix-qualified N)
 _LIMIT_RE = re.compile(
-    r"\b(?:top|first|last|limit|show|list|get|fetch)\s+(\d+)\b(?!\s+(?:days?|weeks?|months?|years?|hours?|minutes?))"
-    r"|\b(\d+)\s*(?:issues?|tickets?|results?|items?)\b",
+    r"\b(?:top|first|last|limit|show|list|get|fetch|give|find|return)\s+(?:me\s+)?(\d+)\b(?!\s+(?:days?|weeks?|months?|years?|hours?|minutes?))"
+    r"|\b(\d+)\s+(?:\w+\s+)?(?:issues?|tickets?|results?|items?)\b",
     re.IGNORECASE,
 )
 # Used in _handle_raw_query to strip LIMIT before direct JQL execution.
@@ -807,7 +807,7 @@ class AtlasMind:
 
         return JqlResponse(jql=jql, chart_spec=chart_spec_dict), jira_result
 
-    async def generate_jql(self, query: str, jira_token: str | None = None, jira_url: str | None = None) -> tuple[JqlResponse, dict | None]:
+    async def generate_jql(self, query: str, jira_token: str | None = None, jira_url: str | None = None, limit: int | None = None) -> tuple[JqlResponse, dict | None]:
         """Generate a JQL query (or general answer) from a natural language request.
 
         Stage 1: fast route via QueryRouter — classifies as JQL, general, or raw.
@@ -856,6 +856,7 @@ class AtlasMind:
         logger.info("*** AI answer: %s", llm_result.answer)
         logger.info("*** AI where_fields: %s", llm_result.where_fields)
         logger.info("*** AI clauses: %s", [(c.field, c.operator, c.value) for c in llm_result.clauses])
+        logger.info("*** AI limit: %s", llm_result.limit)
 
         if not llm_result.jql and not llm_result.answer:
             logger.warning("LLM returned null jql and null answer — returning fallback")
@@ -893,7 +894,10 @@ class AtlasMind:
             combined_extra: list[str] = list(
                 dict.fromkeys((resolved.field_ids or []) + rag_field_ids)
             )
-            max_results = _parse_limit(query)
+            _llm_limit = llm_result.limit
+            if _llm_limit and MAX_JIRA_RESULTS:
+                _llm_limit = min(_llm_limit, MAX_JIRA_RESULTS)
+            max_results = limit if limit is not None else (_llm_limit or _parse_limit(query))
             accumulated_prompt = prompt  # grows with each retry block
 
             for attempt in range(1, JQL_MAX_ATTEMPTS + 1):
