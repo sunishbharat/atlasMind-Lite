@@ -659,7 +659,7 @@ class AtlasMind:
             "Do NOT use JQL clause names or field IDs — only the display name before the colon.\n"
             f"{fields_block}\n\n"
             "## JQL Rules\n"
-            "1. Use only field IDs and allowed values listed above — do not invent fields or values.\n"
+            "1. Use only field IDs and allowed values listed above, OR values the user explicitly stated in the User Request below. Do not invent or guess values that neither appear above nor were stated by the user.\n"
             "2. Do not use placeholder values like 'ProjectName' or 'USERNAME'.\n"
             "3. If no specific project is mentioned, omit the project filter.\n"
             "4. Do NOT use date arithmetic between two fields — JQL does not support it.\n"
