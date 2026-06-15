@@ -209,6 +209,10 @@ DEFAULT_JQL  = "statusCategory != Done ORDER BY created DESC"
 MAX_RESULTS  = 1000
 MAX_JIRA_RESULTS = int(os.getenv("MAX_JIRA_RESULTS", "2000"))
 
+# -- POST /issue_details limits ----------------------------------------
+MAX_ISSUE_DETAILS_KEYS     = int(os.getenv("MAX_ISSUE_DETAILS_KEYS",     "50"))
+MAX_ISSUE_DETAILS_COMMENTS = int(os.getenv("MAX_ISSUE_DETAILS_COMMENTS", "50"))
+
 # -- JQL retry -----------------------------------------------------------
 # Total attempts per query: 1 initial + (JQL_MAX_ATTEMPTS - 1) retries.
 JQL_MAX_ATTEMPTS = int(os.getenv("JQL_MAX_ATTEMPTS", "4"))

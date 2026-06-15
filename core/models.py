@@ -2,8 +2,11 @@
 models.py — Pydantic request/response models for the aMind API.
 """
 
+import re
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
+
+_JIRA_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
 
 
 class RouteResult(BaseModel):
@@ -124,3 +127,60 @@ class QueryResponse(BaseModel):
 class ApiResponse(BaseModel):
     output: Optional[QueryResponse] = None
     error:  Optional[str]           = None
+
+
+# -- POST /issue_details models ----------------------------------------
+
+class Comment(BaseModel):
+    id:      str
+    author:  str
+    body:    str
+    created: str
+    updated: str
+
+
+class IssueLink(BaseModel):
+    type:                str
+    direction:           Literal["outward", "inward"]
+    linked_issue_key:    str
+    linked_issue_summary: Optional[str] = None
+
+
+class ChangelogEntry(BaseModel):
+    field:      str
+    from_value: Optional[str] = None
+    to_value:   str
+    author:     str
+    timestamp:  str
+
+
+class IssueDetail(BaseModel):
+    key:          str
+    priority:     Optional[str] = None
+    assignee:     Optional[str] = None
+    due_date:     Optional[str] = None
+    fix_versions: list[str]     = []
+    flagged:      bool          = False
+    comments:     list[Comment]        = []
+    links:        list[IssueLink]      = []
+    changelog:    list[ChangelogEntry] = []
+
+
+class IssueDetailsRequest(BaseModel):
+    issue_keys:     list[str]     = Field(..., min_length=1)
+    request_id:     Optional[str] = None
+    comments_limit: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("issue_keys")
+    @classmethod
+    def _validate_keys(cls, v: list[str]) -> list[str]:
+        for key in v:
+            if not _JIRA_KEY_RE.match(key):
+                raise ValueError(f"Invalid Jira issue key: {key!r}")
+        return v
+
+
+class IssueDetailsResponse(BaseModel):
+    issues:    list[IssueDetail] = []
+    not_found: list[str]         = []
+    error:     Optional[str]     = None

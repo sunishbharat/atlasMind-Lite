@@ -12,12 +12,19 @@ from core.groq_client import GroqUnavailable
 from core.bedrock_claude_client import BedrockUnavailable
 from core.field_resolver import ExtraField, ResolvedIntentFields
 from dconfig import EmbeddingsConfig
-from core.models import ChartSpec, QueryRequest, QueryResponse, ServerMeta, TokenUsage
+from core.models import (
+    ChartSpec, IssueDetailsRequest, IssueDetailsResponse,
+    QueryRequest, QueryResponse, ServerMeta, TokenUsage,
+)
 from core.client_events import ClientEvent, ClientEventType, EventAck
 import core.client_events as client_events
 from config.jira_config import load_active_jira_profile
 from core.jira_auth import jira_token_dep, jira_url_dep
-from settings import EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL, CLAUDE_MODEL, BEDROCK_MODEL
+from jira.jira_issue_details import fetch_issue_details
+from settings import (
+    EMBEDDING_MODEL, GROQ_MODEL, OLLAMA_MODEL, CLAUDE_MODEL, BEDROCK_MODEL,
+    MAX_ISSUE_DETAILS_KEYS, MAX_ISSUE_DETAILS_COMMENTS,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -310,6 +317,60 @@ async def post_event(event: ClientEvent):
         return EventAck(request_id=event.request_id, accepted=True, detail="ok")
 
     return EventAck(request_id=event.request_id, accepted=False, detail="unhandled event type")
+
+
+@app.post("/issue_details", response_model=IssueDetailsResponse)
+async def issue_details(
+    request:    IssueDetailsRequest,
+    jira_token: str | None = Depends(jira_token_dep),
+    jira_url:   str | None = Depends(jira_url_dep),
+):
+    """Return raw per-issue content (comments, links, changelog) for a batch of keys."""
+    if len(request.issue_keys) > MAX_ISSUE_DETAILS_KEYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"issue_keys: max {MAX_ISSUE_DETAILS_KEYS} keys per request",
+        )
+
+    profile = load_active_jira_profile()
+    base_url = _resolve_base_url(jira_url, profile.jira_url)
+    credential = profile.resolve_auth(token_override=jira_token)
+    logger.info(
+        "POST /issue_details keys=%d url=%s authenticated=%s",
+        len(request.issue_keys), base_url, credential.is_authenticated,
+    )
+
+    effective_limit = min(
+        request.comments_limit or 20,
+        MAX_ISSUE_DETAILS_COMMENTS,
+    )
+
+    try:
+        issues, not_found = await fetch_issue_details(
+            issue_keys=request.issue_keys,
+            base_url=base_url,
+            auth=credential.auth,
+            auth_headers=credential.headers,
+            jira_type=str(profile.jira_type.value),
+            comments_limit=effective_limit,
+        )
+        return IssueDetailsResponse(issues=issues, not_found=not_found)
+    except ValueError as exc:
+        logger.error("POST /issue_details batch failed: %s", exc)
+        return IssueDetailsResponse(error=f"Error: {exc}")
+    except Exception as exc:
+        logger.exception("POST /issue_details unexpected error: %s", exc)
+        return IssueDetailsResponse(error=f"Error: {exc}")
+
+
+def _resolve_base_url(header_url: str | None, profile_url: str) -> str:
+    """Use X-Jira-Url header when valid (http/https with netloc), else profile URL."""
+    if header_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(header_url)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return header_url.rstrip("/")
+    return profile_url
 
 
 if __name__ == "__main__":
