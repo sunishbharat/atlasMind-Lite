@@ -366,7 +366,7 @@ class Jira_Field_Embeddings:
             with pgclient.cursor() as cur:
                 cur.execute(
                     f"SELECT field_id, field_name FROM {JIRA_FIELD_TABLE} "
-                    f"WHERE lower(field_name) = lower(%s) LIMIT 1;",
+                    f"WHERE lower(field_name) = lower(%s) ORDER BY field_id LIMIT 1;",
                     (name,),
                 )
                 exact = cur.fetchone()
