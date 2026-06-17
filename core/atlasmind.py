@@ -643,7 +643,7 @@ class AtlasMind:
                 extra = f", {', '.join(hints[1:])}" if len(hints) > 1 else ""
                 return f"  - {desc} [Assets field — use aqlFunction syntax: {example}{extra}]"
             if hints:
-                return f"  - {desc} [Query-relevant values: {', '.join(hints)}]"
+                return f"  - {desc} [Value format example (pattern only): {', '.join(hints)}]"
             return f"  - {desc}"
 
         fields_block = "\n".join(_field_line(row) for row in jira_fields)
@@ -660,6 +660,9 @@ class AtlasMind:
             f"{fields_block}\n\n"
             "## JQL Rules\n"
             "1. Use only field IDs and allowed values listed above, OR values the user explicitly stated in the User Request below. Do not invent or guess values that neither appear above nor were stated by the user.\n"
+            "   [Value format example] hints show naming patterns only. When the user states explicit values, apply the hint pattern to those values — do NOT copy the hint value verbatim.\n"
+            "   CORRECT: hint 'PROJ_V017.0' + user says 'V011 to V021' => \"Field\" >= \"PROJ_V011.0\" AND \"Field\" <= \"PROJ_V021.0\"\n"
+            "   WRONG:   \"Field\" >= \"PROJ_V017.0\" AND \"Field\" <= \"PROJ_V017.0\"  (hint copied verbatim, user values ignored)\n"
             "2. Do not use placeholder values like 'ProjectName' or 'USERNAME'.\n"
             "3. If no specific project is mentioned, omit the project filter.\n"
             "4. Do NOT use date arithmetic between two fields — JQL does not support it.\n"
