@@ -513,6 +513,72 @@ class TestSanitizeFull:
 
 
 # ---------------------------------------------------------------------------
+# Cloud-only passes (is_cloud=True)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cloud_sanitizer(name_to_id, id_to_name, allowed_values, mock_fve, mock_model):
+    return JqlSanitizer(
+        name_to_id=name_to_id,
+        id_to_name=id_to_name,
+        allowed_values=allowed_values,
+        field_value_embeddings=mock_fve,
+        model=mock_model,
+        is_cloud=True,
+    )
+
+
+class TestCloudOnlyPasses:
+
+    def test_field_type_annotation_stripped(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize(
+            '"Customer Projects[Multi Select]" = "Sample"'
+        )
+        assert '"Customer Projects"' in result.jql
+        assert '[' not in result.jql
+
+    def test_field_annotation_not_stripped_when_server(self, sanitizer):
+        jql = '"Customer Projects[Multi Select]" = "Sample"'
+        result = sanitizer.sanitize(jql)
+        assert '[' in result.jql
+
+    def test_cf_id_resolved_to_display_name(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize('cf[10100] = "Sample"')
+        assert '"Customer Projects"' in result.jql
+        assert 'cf[' not in result.jql
+
+    def test_cf_unknown_id_left_unchanged(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize('cf[99999] = "Sample"')
+        assert 'cf[99999]' in result.jql
+
+    def test_cf_not_resolved_when_server(self, sanitizer):
+        result = sanitizer.sanitize('cf[10100] = "Sample"')
+        assert 'cf[10100]' in result.jql
+
+    def test_version_dot_in_in_clause_quoted(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize('fixVersion IN (3.1.0, EMPTY)')
+        assert '"3.1.0"' in result.jql
+        assert 'EMPTY' in result.jql
+
+    def test_version_dot_in_in_clause_not_quoted_when_server(self, sanitizer):
+        result = sanitizer.sanitize('fixVersion IN (3.1.0, EMPTY)')
+        assert '"3.1.0"' not in result.jql
+        assert '3.1.0' in result.jql
+
+    def test_comparison_bare_value_with_dot_quoted(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize('fixVersion >= SampleVer.0')
+        assert '"SampleVer.0"' in result.jql
+
+    def test_comparison_already_quoted_not_double_quoted(self, cloud_sanitizer):
+        result = cloud_sanitizer.sanitize('fixVersion >= "SampleVer.0"')
+        assert result.jql.count('"SampleVer.0"') == 1
+
+    def test_comparison_bare_value_not_quoted_when_server(self, sanitizer):
+        result = sanitizer.sanitize('fixVersion >= SampleVer.0')
+        assert '"SampleVer.0"' not in result.jql
+
+
+# ---------------------------------------------------------------------------
 # JiraFieldValueEmbeddings — pure logic (no DB)
 # ---------------------------------------------------------------------------
 

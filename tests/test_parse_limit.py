@@ -53,7 +53,7 @@ class TestParseLimitDefaultFallback:
         "show me open bugs in project KAFKA",
         "list unresolved issues assigned to me",
         "what are the blockers in the current sprint",
-        "issues in Driving Functions domain",
+        "issues in sample team",
     ])
     def test_returns_max_results(self, query):
         assert _parse_limit(query) == MAX_RESULTS
