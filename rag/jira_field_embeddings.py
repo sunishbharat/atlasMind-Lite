@@ -361,7 +361,7 @@ class Jira_Field_Embeddings:
         Returns:
             (field_id, canonical_name) or None.
         """
-        # Exact text match — no embedding needed, no distance threshold applied.
+        # Exact text match - no embedding needed, no distance threshold applied.
         with PGVectorClient(self.pgConfig) as pgclient:
             with pgclient.cursor() as cur:
                 cur.execute(

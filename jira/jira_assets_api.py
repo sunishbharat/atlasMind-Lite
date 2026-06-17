@@ -47,7 +47,7 @@ def _load_asset_keywords_from_config() -> list[str]:
                 return keywords
     except Exception as exc:
         logger.warning(
-            "Failed to load asset keywords from %s — using defaults %s. Error: %s",
+            "Failed to load asset keywords from %s - using defaults %s. Error: %s",
             JIRA_ASSETS_CONFIG_FILE, _DEFAULT_ASSET_KEYWORDS, exc,
         )
     return _DEFAULT_ASSET_KEYWORDS
