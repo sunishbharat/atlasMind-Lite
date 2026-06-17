@@ -22,7 +22,7 @@ from core.models import JqlResponse, RouteResult, TokenUsage
 from dconfig import EmbeddingsConfig
 from config.jira_config import get_data_dir, load_active_jira_profile
 from jira.jira_compute import enrich_issue
-from jira.jira_assets_api import detect_asset_fields, fetch_labels_for_config, load_asset_data
+from jira.jira_assets_api import detect_asset_fields, fetch_labels_for_config, load_asset_data, resolve_asset_object_refs
 from jira.jira_search import JiraSearchClient, JiraSearchRequest
 from rag.jira_asset_embeddings import JiraAssetEmbeddings
 from rag.jira_field_value_embeddings import JiraFieldValueEmbeddings
@@ -517,6 +517,9 @@ class AtlasMind:
                     logger.info("Assets fields may have changed — re-fetching labels from Jira...")
                     credential = profile.resolve_auth()
                     import concurrent.futures
+                    # run() is called from uvicorn's async lifespan, so asyncio.run()
+                    # would fail with "cannot run nested event loop". ThreadPoolExecutor
+                    # gives fetch_labels_for_config its own thread and isolated event loop.
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                         executor.submit(
                             asyncio.run,
@@ -773,6 +776,19 @@ class AtlasMind:
                 auth_headers=auth_headers,
             )
         )
+
+        # Cloud-only: resolve CMDB object references to human-readable labels.
+        # Raw Cloud API returns {workspaceId, objectId} dicts for Assets fields;
+        # these have no name/label key so _extract_field_value returns None.
+        if effective_jira_type == "cloud" and self.asset_field_ids and result.issues:
+            await resolve_asset_object_refs(
+                result.issues,
+                self.asset_field_ids,
+                base_url,
+                auth,
+                auth_headers,
+            )
+
         return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched, "jira_type": effective_jira_type}
 
     async def _handle_raw_query(self, route: RouteResult, jira_token: str | None = None, jira_url: str | None = None, jira_type_override: str | None = None) -> tuple[JqlResponse, dict]:

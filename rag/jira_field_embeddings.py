@@ -347,19 +347,37 @@ class Jira_Field_Embeddings:
     ) -> tuple[str, str] | None:
         """Find the closest known Jira field for an unrecognised field name.
 
-        Encodes name with the same model used at seeding time and runs a
-        cosine similarity search against jira_field_embeddings. Returns
-        (field_id, canonical_name) of the best match, or None if the
-        closest result exceeds distance_threshold.
+        Tries an exact case-insensitive text match first, then falls back to
+        embedding similarity. The text-first path avoids the high cosine distance
+        that results from comparing a short bare name (e.g. "Domain") against
+        full field description vectors ("Domain: a custom field of type object...").
 
         Args:
             name:               Unknown field name proposed by the LLM.
             model:              SentenceTransformer — must match the seeding model.
-            distance_threshold: Reject matches with distance above this value.
+            distance_threshold: Reject embedding matches with distance above this value.
+                                Ignored for exact text matches.
 
         Returns:
             (field_id, canonical_name) or None.
         """
+        # Exact text match — no embedding needed, no distance threshold applied.
+        with PGVectorClient(self.pgConfig) as pgclient:
+            with pgclient.cursor() as cur:
+                cur.execute(
+                    f"SELECT field_id, field_name FROM {JIRA_FIELD_TABLE} "
+                    f"WHERE lower(field_name) = lower(%s) LIMIT 1;",
+                    (name,),
+                )
+                exact = cur.fetchone()
+        if exact:
+            logger.info(
+                "find_similar_field_name: %r → %r (field_id=%r, exact text match)",
+                name, exact[1], exact[0],
+            )
+            return exact[0], exact[1]
+
+        # Fallback: embedding similarity for near-matches (e.g. "fixVersion" → "Fix Version/s").
         embedding = model.encode(name, normalize_embeddings=True)
         sql = f"""
             SELECT field_id, field_name,
