@@ -143,6 +143,12 @@ class JiraSearchClient:
             if next_page_token:
                 body["nextPageToken"] = next_page_token
             if request.cmdb_field_ids:
+                # Atlassian Assets inline expand: "<customfield_id>.cmdb.label" is a
+                # Jira Cloud search API extension that returns the Assets object display
+                # label inside each issue field entry. Not in the official REST spec but
+                # confirmed via Atlassian support and community references. If a tenant
+                # does not support it, the field is returned without the label key and
+                # the CMDB diagnostic in atlasmind.py will log a warning.
                 body["expand"] = [f"{fid}.cmdb.label" for fid in sorted(request.cmdb_field_ids)]
 
             page = await self._fetch_page_cloud(url, body, request.auth, request.auth_headers)

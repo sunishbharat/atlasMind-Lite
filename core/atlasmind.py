@@ -552,6 +552,7 @@ class AtlasMind:
             field_value_embeddings=self.field_value_embeddings,
             model=self.document_processor._model,
             asset_field_ids=self.asset_field_ids,
+            is_cloud=(profile.jira_type == "cloud"),
         )
 
         from core.jql_semantic_validator import JqlSemanticValidator
@@ -766,7 +767,7 @@ class AtlasMind:
         logger.info("Executing JQL against %s: %s", base_url, jql)
         # Cloud-only: pass CMDB field IDs so the search request adds inline expand
         # parameters (e.g. customfield_XXXXX.cmdb.label). The expanded response
-        # includes the label directly — no separate Assets API call needed.
+        # includes the label directly - no separate Assets API call needed.
         cmdb_ids = self.asset_field_ids if effective_jira_type == "cloud" else set()
         result = await client.search(
             JiraSearchRequest(
@@ -783,21 +784,23 @@ class AtlasMind:
         )
 
         if cmdb_ids and result.issues:
-            resolved = sum(
-                1
-                for issue in result.issues
-                for fid in cmdb_ids
-                for ref in (issue.get("fields", {}).get(fid) or [])
-                if isinstance(ref, dict) and ref.get("label")
-            )
-            if resolved == 0:
+            issues_with_field = 0
+            resolved = 0
+            for issue in result.issues:
+                for fid in cmdb_ids:
+                    fv = issue.get("fields", {}).get(fid)
+                    if fv:
+                        issues_with_field += 1
+                    if isinstance(fv, list) and any(isinstance(r, dict) and r.get("label") for r in fv):
+                        resolved += 1
+            if issues_with_field > 0 and resolved == 0:
                 logger.warning(
                     "CMDB expand returned 0 labels for %d field(s) across %d issue(s) "
                     "- verify expand support for this tenant",
                     len(cmdb_ids), len(result.issues),
                 )
-            else:
-                logger.info("CMDB expand resolved labels for %d field ref(s)", resolved)
+            elif resolved > 0:
+                logger.info("CMDB expand resolved labels for %d issue-field pair(s)", resolved)
 
         return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched, "jira_type": effective_jira_type}
 

@@ -26,8 +26,6 @@ All passes are deterministic — no LLM call, zero token cost.
 
 import logging
 import re
-from collections.abc import Callable
-
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
@@ -104,6 +102,29 @@ _JQL_PLAIN_FIELD_IN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Cloud-only patterns ---
+
+# Strips type annotations appended by the LLM to quoted field names, e.g.
+# "Sample Planned Version[Version Picker (single version)]" → "Sample Planned Version"
+_JQL_FIELD_ANNOTATION_RE = re.compile(r'"([^"\[]+)\[[^\]]*\]"')
+
+# Matches cf[NNNNN] field references — LLM sometimes emits these during retry
+# instead of using the quoted display name.
+_JQL_CF_REF_RE = re.compile(r'\bcf\[(\d+)\]', re.IGNORECASE)
+
+# Matches comparison operators followed by an unquoted value that contains
+# special characters requiring JQL quoting (e.g. dots in version strings like i3_E250.0).
+# Skips already-quoted values, pure numbers, and negative signs (date offsets like -5d).
+_JQL_COMPARISON_BARE_VALUE_RE = re.compile(
+    r'((?:!=|>=?|<=?|(?<![!<>=])=)\s*)'
+    r'(?!["\'\d\-])'
+    r'([A-Za-z_][A-Za-z0-9_]*(?:[.\-/][A-Za-z0-9_]+)+)',
+    re.IGNORECASE,
+)
+
+# Characters in an unquoted IN-clause value that require JQL double-quoting.
+_JQL_VALUE_SPECIAL_CHARS = frozenset('.-/')
+
 
 class ValueCorrection(BaseModel):
     """An auto-corrected value substitution made by the sanitizer (high confidence)."""
@@ -168,12 +189,14 @@ class JqlSanitizer:
         field_value_embeddings: JiraFieldValueEmbeddings,
         model: SentenceTransformer,
         asset_field_ids: set[str] | None = None,
+        is_cloud: bool = False,
     ) -> None:
         self._id_to_name = id_to_name
         self._allowed_values = allowed_values
         self._field_value_embeddings = field_value_embeddings
         self._model = model
         self._asset_field_ids: frozenset[str] = frozenset(asset_field_ids or ())
+        self._is_cloud = is_cloud
         # field_display_name.lower() → field_id; used by the Assets rewrite pass.
         self._name_lower_to_id: dict[str, str] = {
             name.lower(): fid for fid, name in id_to_name.items()
@@ -215,14 +238,42 @@ class JqlSanitizer:
         corrections: list[ValueCorrection] = []
         hints: list[ValueHint] = []
 
+        # Cloud-only: strip bracket type annotations from quoted field names.
+        # The LLM sometimes appends the Jira field type in brackets, e.g.
+        # "Sample Planned Version[Version Picker (single version)]".
+        # Jira rejects these — strip before any other pass.
+        if self._is_cloud:
+            stripped = _JQL_FIELD_ANNOTATION_RE.sub(lambda m: f'"{m.group(1).strip()}"', jql)
+            if stripped != jql:
+                logger.info("JQL: stripped field type annotations: %s", stripped)
+            jql = stripped
+
+            # Cloud-only: resolve cf[NNNNN] to quoted display name.
+            # The retry LLM sometimes emits cf[NNNNN] syntax and guesses wrong IDs.
+            resolved_cf = self._resolve_cf_ids(jql)
+            if resolved_cf != jql:
+                logger.info("JQL: resolved cf[] references: %s", resolved_cf)
+            jql = resolved_cf
+
         # Pass 1 — quote known multi-word field names in WHERE and ORDER BY.
         jql = self._quote_field_names(jql)
 
         # Pass 2 — quote multi-word values inside IN (...) clauses.
-        quoted = self._quote_multiword_in_values(jql)
+        # On Cloud also quotes values with dots/slashes/hyphens (e.g. version strings).
+        quoted = self._quote_multiword_in_values(jql, quote_special_chars=self._is_cloud)
         if quoted != jql:
-            logger.info("JQL after multi-word IN-value quoting: %s", quoted)
+            logger.info("JQL after IN-value quoting: %s", quoted)
         jql = quoted
+
+        # Pass 2b (Cloud) — quote unquoted values with special chars in comparison ops.
+        # Catches patterns like >= SampleVersion.0 that Jira requires quoted.
+        if self._is_cloud:
+            cmp_quoted = _JQL_COMPARISON_BARE_VALUE_RE.sub(
+                lambda m: f'{m.group(1)}"{m.group(2)}"', jql
+            )
+            if cmp_quoted != jql:
+                logger.info("JQL after comparison value quoting: %s", cmp_quoted)
+            jql = cmp_quoted
 
         # Pass 3 — strip LIMIT clause (not supported by Jira REST API).
         clean = _JQL_LIMIT_RE.sub("", jql).strip()
@@ -345,12 +396,45 @@ class JqlSanitizer:
         return where_part + order_part
 
     # ------------------------------------------------------------------
+    # Cloud-only helpers — field annotation stripping and cf[] resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_cf_ids(self, jql: str) -> str:
+        """Replace cf[NNNNN] with the quoted display name looked up from id_to_name.
+
+        The retry LLM sometimes emits cf[NNNNN] syntax with a guessed (often wrong)
+        field ID. Resolving to the canonical display name prevents Jira from rejecting
+        the query and avoids the wrong-ID problem described in the retry failure analysis.
+        Unrecognised IDs are left untouched so the Jira error surfaces normally.
+        """
+        def _replace(m: re.Match) -> str:
+            field_id = f"customfield_{m.group(1)}"
+            display_name = self._id_to_name.get(field_id)
+            if display_name:
+                logger.info(
+                    "JQL sanitizer: resolved cf[%s] → %r", m.group(1), display_name
+                )
+                return f'"{display_name}"'
+            logger.warning(
+                "JQL sanitizer: cf[%s] (customfield_%s) not in id_to_name — leaving as-is",
+                m.group(1), m.group(1),
+            )
+            return m.group(0)
+
+        return _JQL_CF_REF_RE.sub(_replace, jql)
+
+    # ------------------------------------------------------------------
     # Pass 2 — multi-word value quoting in IN clauses
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _quote_multiword_in_values(jql: str) -> str:
-        """Quote unquoted multi-word values inside IN (...) clauses."""
+    def _quote_multiword_in_values(jql: str, quote_special_chars: bool = False) -> str:
+        """Quote unquoted values inside IN (...) clauses.
+
+        Always quotes multi-word values (containing spaces).
+        When quote_special_chars=True (Cloud only), also quotes values that contain
+        dots, slashes, or hyphens — required for version strings like SampleVer.0.
+        """
         def _fix(m: re.Match) -> str:
             in_kw = m.group(1)
             raw_vals = m.group(2)
@@ -366,6 +450,12 @@ class JqlSanitizer:
                 ):
                     fixed.append(p)
                 elif " " in p:
+                    fixed.append(f'"{p}"')
+                elif (
+                    quote_special_chars
+                    and p.upper() not in ('EMPTY', 'NULL')
+                    and _JQL_VALUE_SPECIAL_CHARS.intersection(p)
+                ):
                     fixed.append(f'"{p}"')
                 else:
                     fixed.append(p)
