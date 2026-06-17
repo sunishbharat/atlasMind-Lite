@@ -32,6 +32,9 @@ class JiraSearchRequest(BaseModel):
     search_path: str | None = None
     auth: tuple[str, str] | None = None
     auth_headers: dict[str, str] = Field(default_factory=dict)
+    # Cloud-only: CMDB/Assets field IDs to expand inline (label + objectKey).
+    # Ignored by the server path.
+    cmdb_field_ids: set[str] = Field(default_factory=set)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -139,6 +142,8 @@ class JiraSearchClient:
             body: dict[str, Any] = {"jql": request.jql, "fields": fields_list, "maxResults": page_size}
             if next_page_token:
                 body["nextPageToken"] = next_page_token
+            if request.cmdb_field_ids:
+                body["expand"] = [f"{fid}.cmdb.label" for fid in sorted(request.cmdb_field_ids)]
 
             page = await self._fetch_page_cloud(url, body, request.auth, request.auth_headers)
             total = page.total

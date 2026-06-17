@@ -22,7 +22,7 @@ from core.models import JqlResponse, RouteResult, TokenUsage
 from dconfig import EmbeddingsConfig
 from config.jira_config import get_data_dir, load_active_jira_profile
 from jira.jira_compute import enrich_issue
-from jira.jira_assets_api import detect_asset_fields, fetch_labels_for_config, load_asset_data, resolve_asset_object_refs
+from jira.jira_assets_api import detect_asset_fields, fetch_labels_for_config, load_asset_data
 from jira.jira_search import JiraSearchClient, JiraSearchRequest
 from rag.jira_asset_embeddings import JiraAssetEmbeddings
 from rag.jira_field_value_embeddings import JiraFieldValueEmbeddings
@@ -315,12 +315,12 @@ _SPRINT_TOSTRING_NAME_RE = re.compile(r"\bname=([^,\]]+)")
 def _extract_field_value(v: Any) -> Any:
     """Return a human-readable scalar from a raw Jira field entry.
 
-    - dict  → name / value / displayName
+    - dict  → name / label / value / displayName
     - Sprint toString string → name= segment (e.g. "Usergrid 34")
     - primitive → as-is
     """
     if isinstance(v, dict):
-        return v.get("name") or v.get("value") or v.get("displayName")
+        return v.get("name") or v.get("label") or v.get("value") or v.get("displayName")
     if isinstance(v, str):
         m = _SPRINT_TOSTRING_NAME_RE.search(v)
         if m:
@@ -764,6 +764,10 @@ class AtlasMind:
             raise ValueError(f"Jira rejected the JQL: {jql_error}")
 
         logger.info("Executing JQL against %s: %s", base_url, jql)
+        # Cloud-only: pass CMDB field IDs so the search request adds inline expand
+        # parameters (e.g. customfield_XXXXX.cmdb.label). The expanded response
+        # includes the label directly — no separate Assets API call needed.
+        cmdb_ids = self.asset_field_ids if effective_jira_type == "cloud" else set()
         result = await client.search(
             JiraSearchRequest(
                 jql=jql,
@@ -774,20 +778,26 @@ class AtlasMind:
                 search_path=effective_search_path,
                 auth=auth,
                 auth_headers=auth_headers,
+                cmdb_field_ids=cmdb_ids,
             )
         )
 
-        # Cloud-only: resolve CMDB object references to human-readable labels.
-        # Raw Cloud API returns {workspaceId, objectId} dicts for Assets fields;
-        # these have no name/label key so _extract_field_value returns None.
-        if effective_jira_type == "cloud" and self.asset_field_ids and result.issues:
-            await resolve_asset_object_refs(
-                result.issues,
-                self.asset_field_ids,
-                base_url,
-                auth,
-                auth_headers,
+        if cmdb_ids and result.issues:
+            resolved = sum(
+                1
+                for issue in result.issues
+                for fid in cmdb_ids
+                for ref in (issue.get("fields", {}).get(fid) or [])
+                if isinstance(ref, dict) and ref.get("label")
             )
+            if resolved == 0:
+                logger.warning(
+                    "CMDB expand returned 0 labels for %d field(s) across %d issue(s) "
+                    "- verify expand support for this tenant",
+                    len(cmdb_ids), len(result.issues),
+                )
+            else:
+                logger.info("CMDB expand resolved labels for %d field ref(s)", resolved)
 
         return {"jql": jql, "raw_issues": result.issues, "total": result.total, "shown": result.fetched, "jira_type": effective_jira_type}
 
