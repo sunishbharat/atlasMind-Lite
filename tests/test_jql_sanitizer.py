@@ -577,6 +577,23 @@ class TestCloudOnlyPasses:
         result = sanitizer.sanitize('fixVersion >= SampleVer.0')
         assert '"SampleVer.0"' not in result.jql
 
+    def test_is_cloud_override_true_on_server_sanitizer(self, sanitizer):
+        # A server-profile sanitizer should apply cloud passes when the caller
+        # passes is_cloud_override=True (e.g. /cloud subcommand on a server profile).
+        result = sanitizer.sanitize(
+            '"Customer Projects[Multi Select]" = "Sample"',
+            is_cloud_override=True,
+        )
+        assert '"Customer Projects"' in result.jql
+        assert '[' not in result.jql
+
+    def test_is_cloud_override_false_on_cloud_sanitizer(self, cloud_sanitizer):
+        # A cloud-profile sanitizer must NOT apply cloud passes when the caller
+        # passes is_cloud_override=False (e.g. /server subcommand on a cloud profile).
+        jql = '"Customer Projects[Multi Select]" = "Sample"'
+        result = cloud_sanitizer.sanitize(jql, is_cloud_override=False)
+        assert '[' in result.jql
+
 
 # ---------------------------------------------------------------------------
 # JiraFieldValueEmbeddings — pure logic (no DB)

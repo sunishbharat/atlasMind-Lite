@@ -17,13 +17,15 @@ JQL rules:
   CORRECT: created >= -365d   updated >= -30d   created >= -12M   updated >= -4w
   INVALID: created >= -1y     updated >= '1y ago'   created >= 'last year'
 - The DURING predicate requires exactly two absolute dates: status WAS 'Done' DURING ('2023-01-01', '2024-01-01'). Do NOT use relative periods with DURING.
-- For range queries ('between X and Y', 'from X to Y', 'X through Y') on version, number, or ordinal fields, use >= and <= operators with the EXACT boundary values the user stated. Never collapse a range into a single IN value, and never substitute user-stated boundary values with hint values.
-  CORRECT: "Planned Version" >= "PROJ_V001.0" AND "Planned Version" <= "PROJ_V009.0"
-  WRONG:   "Planned Version" in (PROJ_V005.0)
-  WRONG:   "Planned Version" >= "PROJ_V005.0" AND "Planned Version" <= "PROJ_V005.0"  (hint used for both bounds, user values ignored)
+- For range queries ('between X and Y', 'from X to Y', 'X through Y') on number or ordinal fields, use >= and <= operators with the EXACT boundary values the user stated. Never substitute user-stated boundary values with hint values.
+  CORRECT: storyPoints >= 3 AND storyPoints <= 8
+  WRONG:   storyPoints >= 5 AND storyPoints <= 5  (hint used for both bounds, user values ignored)
+- NEVER use >= or <= on version-type fields. Version range evaluation requires ordering across all issues in the instance and is extremely slow. For version ranges ('between V1 and V2', 'from V1 to V2', 'V1 through V2'), enumerate ALL individual version values in an IN list instead:
+  CORRECT: "Fix Version" IN ('PROJ_V003.0', 'PROJ_V004.0', 'PROJ_V005.0')  (user said 'V003 to V005')
+  WRONG:   "Fix Version" >= 'PROJ_V003.0' AND "Fix Version" <= 'PROJ_V005.0'
 - [Value format example] hints show naming patterns only. When the user states explicit values, apply the hint pattern to those values — do NOT copy the hint value verbatim.
-  CORRECT: hint 'PROJ_V017.0' + user says 'V011 to V021' => "Field" >= "PROJ_V011.0" AND "Field" <= "PROJ_V021.0"
-  WRONG:   "Field" >= "PROJ_V017.0" AND "Field" <= "PROJ_V017.0"  (hint copied verbatim, user values ignored)
+  CORRECT: hint 'PROJ_V017.0' + user says 'V011 to V013' => "Planned Version" IN ('PROJ_V011.0', 'PROJ_V012.0', 'PROJ_V013.0')
+  WRONG:   "Planned Version" >= "PROJ_V017.0" AND "Planned Version" <= "PROJ_V017.0"  (hint copied verbatim as a range)
 - ORDER BY MUST appear exactly once, at the very end of the JQL — after ALL WHERE conditions. Never place ORDER BY in the middle of a query or before additional AND/OR conditions.
 - Always end with ORDER BY unless the user specifies otherwise.
 

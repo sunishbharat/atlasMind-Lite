@@ -1,6 +1,7 @@
 import httpx
 import logging
 from cloud.tls import tls
+from core.llm_utils import clean_llm_response
 from settings import GROQ_API_KEY, GROQ_MODEL, GROQ_TEMPERATURE, GROQ_TIMEOUT, GROQ_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
@@ -92,8 +93,4 @@ class GroqClient:
             usage.get("total_tokens", 0),
         )
 
-        text = data["choices"][0]["message"]["content"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
-        return text.strip()
+        return clean_llm_response(data["choices"][0]["message"]["content"])

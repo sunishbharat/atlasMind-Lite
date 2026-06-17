@@ -909,7 +909,7 @@ class AtlasMind:
                     )
                 llm_result = JqlResponse(**{**llm_result.model_dump(), "jql": validated.corrected_jql})
 
-            sanitized = self._sanitize_jql(llm_result.jql, llm_result.where_fields)
+            sanitized = self._sanitize_jql(llm_result.jql, llm_result.where_fields, jira_type_override=route.jira_type_override)
             current_jql = sanitized.jql
             pending_hints = sanitized.hints
 
@@ -1154,7 +1154,7 @@ class AtlasMind:
                             raise _err from parse_exc
 
                     llm_result = JqlResponse(**retry_data)
-                    sanitized = self._sanitize_jql(llm_result.jql or "", llm_result.where_fields)
+                    sanitized = self._sanitize_jql(llm_result.jql or "", llm_result.where_fields, jira_type_override=route.jira_type_override)
                     current_jql = sanitized.jql
                     pending_hints = sanitized.hints
                     logger.info("*** AI JQL retry[%d]: %s", retry_num, current_jql)
@@ -1164,7 +1164,12 @@ class AtlasMind:
 
         return llm_result, jira_result
 
-    def _sanitize_jql(self, jql: str, where_fields: list[str] | None = None) -> SanitizeResult:
+    def _sanitize_jql(
+        self,
+        jql: str,
+        where_fields: list[str] | None = None,
+        jira_type_override: str | None = None,
+    ) -> SanitizeResult:
         """Delegate all JQL cleanup passes to JqlSanitizer.
 
         Args:
@@ -1194,4 +1199,5 @@ class AtlasMind:
                     [self.jql_sanitizer._id_to_name.get(fid, fid) for fid in hint_asset_ids],
                 )
 
-        return self.jql_sanitizer.sanitize(jql, hint_asset_ids=hint_asset_ids)
+        is_cloud_override = (jira_type_override == "cloud") if jira_type_override else None
+        return self.jql_sanitizer.sanitize(jql, hint_asset_ids=hint_asset_ids, is_cloud_override=is_cloud_override)

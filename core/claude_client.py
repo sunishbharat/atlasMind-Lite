@@ -4,6 +4,7 @@ import anthropic
 import httpx
 
 from cloud.tls import tls
+from core.llm_utils import clean_llm_response
 from settings import (
     CLAUDE_API_KEY, CLAUDE_MODEL, CLAUDE_TEMPERATURE, CLAUDE_TIMEOUT, CLAUDE_MAX_TOKENS,
 )
@@ -87,8 +88,4 @@ class ClaudeClient:
             getattr(usage, "cache_creation_input_tokens", 0),
         )
 
-        text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
-        return text.strip()
+        return clean_llm_response(response.content[0].text)

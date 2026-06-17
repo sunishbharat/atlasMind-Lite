@@ -113,7 +113,7 @@ _JQL_FIELD_ANNOTATION_RE = re.compile(r'"([^"\[]+)\[[^\]]*\]"')
 _JQL_CF_REF_RE = re.compile(r'\bcf\[(\d+)\]', re.IGNORECASE)
 
 # Matches comparison operators followed by an unquoted value that contains
-# special characters requiring JQL quoting (e.g. dots in version strings like i3_E250.0).
+# special characters requiring JQL quoting (e.g. dots in version strings like v1.0.0).
 # Skips already-quoted values, pure numbers, and negative signs (date offsets like -5d).
 _JQL_COMPARISON_BARE_VALUE_RE = re.compile(
     r'((?:!=|>=?|<=?|(?<![!<>=])=)\s*)'
@@ -220,7 +220,12 @@ class JqlSanitizer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def sanitize(self, jql: str, hint_asset_ids: frozenset[str] | None = None) -> SanitizeResult:
+    def sanitize(
+        self,
+        jql: str,
+        hint_asset_ids: frozenset[str] | None = None,
+        is_cloud_override: bool | None = None,
+    ) -> SanitizeResult:
         """Apply all cleanup passes to raw LLM-produced JQL.
 
         Args:
@@ -238,11 +243,14 @@ class JqlSanitizer:
         corrections: list[ValueCorrection] = []
         hints: list[ValueHint] = []
 
+        # Per-request override wins; fall back to the startup default.
+        is_cloud = is_cloud_override if is_cloud_override is not None else self._is_cloud
+
         # Cloud-only: strip bracket type annotations from quoted field names.
         # The LLM sometimes appends the Jira field type in brackets, e.g.
         # "Sample Planned Version[Version Picker (single version)]".
         # Jira rejects these — strip before any other pass.
-        if self._is_cloud:
+        if is_cloud:
             stripped = _JQL_FIELD_ANNOTATION_RE.sub(lambda m: f'"{m.group(1).strip()}"', jql)
             if stripped != jql:
                 logger.info("JQL: stripped field type annotations: %s", stripped)
@@ -260,14 +268,14 @@ class JqlSanitizer:
 
         # Pass 2 — quote multi-word values inside IN (...) clauses.
         # On Cloud also quotes values with dots/slashes/hyphens (e.g. version strings).
-        quoted = self._quote_multiword_in_values(jql, quote_special_chars=self._is_cloud)
+        quoted = self._quote_multiword_in_values(jql, quote_special_chars=is_cloud)
         if quoted != jql:
             logger.info("JQL after IN-value quoting: %s", quoted)
         jql = quoted
 
         # Pass 2b (Cloud) — quote unquoted values with special chars in comparison ops.
         # Catches patterns like >= SampleVersion.0 that Jira requires quoted.
-        if self._is_cloud:
+        if is_cloud:
             cmp_quoted = _JQL_COMPARISON_BARE_VALUE_RE.sub(
                 lambda m: f'{m.group(1)}"{m.group(2)}"', jql
             )

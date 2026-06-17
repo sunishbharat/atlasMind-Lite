@@ -3,6 +3,7 @@ import logging
 import requests
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from cloud.tls import tls
+from core.llm_utils import clean_llm_response
 from settings import (
     VLLM_URL, VLLM_MODEL, VLLM_TEMPERATURE, VLLM_TIMEOUT,
     VLLM_MAX_TOKENS, VLLM_API_KEY,
@@ -92,8 +93,4 @@ class VllmClient:
                 f"vLLM error {e.response.status_code}: {e.response.text}"
             ) from e
 
-        text = response.json()["choices"][0]["message"]["content"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
-        return text.strip()
+        return clean_llm_response(response.json()["choices"][0]["message"]["content"])

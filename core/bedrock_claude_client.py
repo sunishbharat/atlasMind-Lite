@@ -5,6 +5,7 @@ import os
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from core.llm_utils import clean_llm_response
 from settings import (
     BEDROCK_API_KEY, CUSTOM_ENDPOINT, BEDROCK_REGION,
     BEDROCK_MODEL, BEDROCK_TEMPERATURE, BEDROCK_TIMEOUT, BEDROCK_MAX_TOKENS,
@@ -91,8 +92,4 @@ class BedrockClaudeClient:
         except BotoCoreError as e:
             raise BedrockUnavailable(f"Bedrock connection error: {e}") from e
 
-        text = text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
-        return text.strip()
+        return clean_llm_response(text)
