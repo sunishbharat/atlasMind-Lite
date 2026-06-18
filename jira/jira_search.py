@@ -149,7 +149,7 @@ class JiraSearchClient:
                 # confirmed via Atlassian support and community references. If a tenant
                 # does not support it, the field is returned without the label key and
                 # the CMDB diagnostic in atlasmind.py will log a warning.
-                body["expand"] = [f"{fid}.cmdb.label" for fid in sorted(request.cmdb_field_ids)]
+                body["expand"] = ",".join(f"{fid}.cmdb.label" for fid in sorted(request.cmdb_field_ids))
 
             page = await self._fetch_page_cloud(url, body, request.auth, request.auth_headers)
             total = page.total
@@ -216,6 +216,7 @@ class JiraSearchClient:
         auth: tuple[str, str] | None,
         auth_headers: dict[str, str],
     ) -> JiraPage:
+        logger.debug("Jira Cloud request body: %s", body)
         try:
             async with tls.httpx_client(timeout=30) as client:
                 response = await client.post(
@@ -226,6 +227,8 @@ class JiraSearchClient:
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            logger.error("Jira Cloud %d error - request body: %s | response: %s",
+                         exc.response.status_code, body, exc.response.text)
             raise ValueError(f"Jira rejected the JQL: {_parse_jira_error(exc)}") from exc
         except httpx.HTTPError as exc:
             logger.warning("Jira REST API call failed: %s", exc)
